@@ -1,6 +1,7 @@
 from __future__ import print_function
 
 import hashlib
+import logging
 import math
 import mimetypes
 import os
@@ -10,6 +11,7 @@ import random
 import socket
 import stat
 import threading
+import time
 import traceback
 from datetime import datetime
 
@@ -18,6 +20,9 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from watchdog.observers import Observer
+from watchdog.events import LoggingEventHandler
+from anytree import Node, Resolver, ResolverError, PreOrderIter
 
 import configurations
 
@@ -25,18 +30,26 @@ socket.setdefaulttimeout(600)  # set timeout to 10 minutes
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/drive']
+Node.separator = os.sep
 
 
 class BackupEngine:
     def __init__(self):
-        self._files = None
+        self._upload_queue = None
+        self._files_to_upload = None
+        self._folder_ids = {}
+        self._total_files_size = 1
+        self._uploaded_files_size = 0
+        self._upload_progress = 0
         self._print_lock = threading.Lock()
         pass
 
     def __enter__(self):
         self._threads = []
-        self._files = queue.Queue()
+        self._folder_ids = {}
+        self._upload_queue = queue.Queue()
         self._workers_active = True
+        self._files_to_upload = None
         self._total_files_size = 1
         self._uploaded_files_size = 0
         self._upload_progress = 0
@@ -49,17 +62,17 @@ class BackupEngine:
         self._service = None
         self._workers_active = False
         for i in range(configurations.WORKERS):
-            self._files.put(None)
+            self._upload_queue.put(None)
 
         for thread in self._threads:
             thread.join()
 
-        with self._files.mutex:
+        with self._upload_queue.mutex:
             self._total_files_size = 1
             self._uploaded_files_size = 0
             self._upload_progress = 0
 
-        self._files = None
+        self._upload_queue = None
         self._threads = []
 
         if exc_type is not None:
@@ -67,9 +80,9 @@ class BackupEngine:
         return True
 
     @staticmethod
-    def _upload_worker(_self):
+    def _sync_worker(_self):
         while _self._workers_active:
-            item = _self._files.get()
+            item = _self._upload_queue.get()
             if item is None:
                 break
             try:
@@ -77,11 +90,11 @@ class BackupEngine:
             except Exception as e:
                 _self._error(f'Failed to backup file {item} with exception: {e}')
 
-            _self._files.task_done()
+            _self._upload_queue.task_done()
 
     def _create_workers(self):
         for i in range(configurations.WORKERS):
-            thread = threading.Thread(name=i, target=BackupEngine._upload_worker, args=[self])
+            thread = threading.Thread(name=i, target=BackupEngine._sync_worker, args=[self])
             self._threads.append(thread)
             thread.start()
 
@@ -123,67 +136,106 @@ class BackupEngine:
 
     def _is_valid_file(self, file_path):
         try:
-            return not bool(os.stat(file_path).st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN) and not os.path.basename(os.path.abspath(file_path)).startswith('.') and not os.path.islink(
+            return not bool(
+                os.stat(file_path).st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN) and not os.path.basename(
+                os.path.abspath(file_path)).startswith('.') and not os.path.islink(
                 file_path) and os.access(file_path, os.R_OK)
         except:
             return False
 
-    def _get_folder_size(self, folder_path, excluded_paths):
+    def _scan_folder(self, folder_path, excluded_paths):
         total_size = 0
-        for root, dirs, files in os.walk(folder_path, topdown=True):
+        parent_node = None
+        for folder_name in folder_path.strip(os.sep).split(os.sep):
+            parent_node = Node(folder_name, parent=parent_node, size=0, drive_id=None, is_file=False)
+        node_resolver = Resolver()
+        for root, folders, files in os.walk(folder_path, topdown=True):
             root = root.rstrip(os.sep)
-            dirs[:] = [d for d in dirs if
-                       ((root + os.sep + d).upper() not in excluded_paths and self._is_valid_file(root + os.sep + d))]
+            folders[:] = [d for d in folders if
+                          ((root + os.sep + d).upper() not in excluded_paths and self._is_valid_file(
+                              root + os.sep + d))]
+            random.shuffle(folders)
+
+            try:
+                parent_node = node_resolver.get(parent_node.root, os.sep + root.lstrip(os.sep))
+            except ResolverError:
+                parent_node = node_resolver.get(parent_node.root, os.sep + os.path.abspath(root + os.sep + '..').lstrip(os.sep))
+                parent_node = Node(os.path.basename(root), parent=parent_node, size=0, drive_id=None, is_file=False)
 
             for name in files:
                 file_path = root + os.sep + name
                 # skip if it is symbolic link
                 if self._is_valid_file(file_path):
-                    total_size += os.path.getsize(file_path)
+                    file_size = os.path.getsize(file_path)
+                    parent_node.size += file_size
+                    Node(name, parent=parent_node, size=file_size, drive_id=None, is_file=True)
+            total_size += parent_node.size
+        return parent_node.root, total_size or 1
 
-        return total_size
+    def _get_node_path(self, node):
+        return ('' if os.sep == '\\' else os.sep) + \
+                    os.sep.join([p.name for p in node.ancestors]) + \
+                    os.sep + node.name
 
-    def _upload_file(self, root, name, folder_id, file_on_drive):
-        file_path = root + os.sep + name
-        if not self._is_valid_file(file_path):
-            return
+    def _upload_file(self, path_node):
+        file_checksum = None
+        file_path = self._get_node_path(path_node)
+        service = build('drive', 'v3', credentials=self._get_creds())
 
-        file_size = os.path.getsize(root + os.sep + name)
-        for i in range(configurations.UPLOAD_RETRIES):
-            try:
-                service = build('drive', 'v3', credentials=self._get_creds())
-
-                media = MediaFileUpload(
-                    file_path,
-                    mimetype=mimetypes.MimeTypes().guess_type(name)[0],
-                    resumable=file_size > 1 * 1024 * 1024)
-
-                if file_on_drive is None:
-                    file_metadata = {'name': name, 'parents': [folder_id]}
-                    service.files().create(body=file_metadata,
-                                                     media_body=media,
-                                                     fields='id').execute()
-                    self._debug(f'file created {file_path}')
-                elif file_on_drive['md5Checksum'] != self._md5(file_path):
-                    updated_file = service.files().update(
-                        fileId=file_on_drive['id'],
-                        body={},
-                        media_body=media).execute()
-                    self._debug(f'file updated {file_path}')
+        if path_node.parent.drive_id is not None:
+            results = service.files().list(
+                pageSize=1, fields="files",
+                q=f'name = "{path_node.name}" and trashed = false and parents in "{path_node.parent.drive_id}"').execute()
+            items = results.get('files', [])
+            if len(items) > 0:
+                item = items[0]
+                if item['mimeType'] == 'application/vnd.google-apps.folder':
+                    service.files().delete(fileId=item['id']).execute()
+                    self._debug(f'file {file_path} found on drive as folder. folder removed, will upload the file now.')
                 else:
-                    self._debug(f'file already exist {file_path}')
+                    path_node.drive_id = item['id']
+                    file_checksum = item['md5Checksum']
 
-                break
-            except Exception as e:
-                if i == configurations.UPLOAD_RETRIES-1:
-                    self._error(f'Failed to backup file {file_path} with exception: {e}')
-                else:
-                    self._debug(f'file upload failed ({i}) {file_path}')
+        if path_node.parent.drive_id is not None and self._is_valid_file(file_path):
+            for i in range(configurations.UPLOAD_RETRIES):
+                try:
+                    media = MediaFileUpload(
+                        file_path,
+                        mimetype=mimetypes.MimeTypes().guess_type(path_node.name)[0],
+                        resumable=path_node.size > 1 * 1024 * 1024)
 
+                    if path_node.drive_id is None:
+                        file_metadata = {'name': path_node.name, 'parents': [path_node.parent.drive_id]}
+                        results = service.files().create(body=file_metadata,
+                                                         media_body=media,
+                                                         fields='id').execute()
+                        path_node.drive_id = results.get('id')
+                        self._debug(f'file uploaded {file_path}')
+                    elif file_checksum != self._md5(file_path):
+                        service.files().update(
+                            fileId=path_node.drive_id,
+                            body={},
+                            media_body=media).execute()
+                        self._debug(f'file updated {file_path}')
+                    else:
+                        self._debug(f'file skipped. file already exist {file_path}')
 
-        with self._files.mutex:
-            self._uploaded_files_size += file_size
-            if (self._uploaded_files_size / self._total_files_size - self._upload_progress) * 100 >= configurations.PROGRESS_INTERNALS:
+                    break
+                except Exception as e:
+                    if i == configurations.UPLOAD_RETRIES - 1:
+                        self._error(f'Failed to backup file {file_path} with exception: {e}')
+                    else:
+                        self._debug(f'file upload failed (try #{i}) {file_path}')
+        elif path_node.drive_id is not None:
+            service.files().delete(fileId=path_node.drive_id).execute()
+            self._debug(f'file deleted {file_path}')
+        else:
+            self._debug(f'file skipped (failed to sync parent or invalid file) {file_path}')
+
+        with self._upload_queue.mutex:
+            self._uploaded_files_size += path_node.size
+            if (
+                    self._uploaded_files_size / self._total_files_size - self._upload_progress) * 100 >= configurations.PROGRESS_INTERNALS:
                 self._upload_progress = self._uploaded_files_size / self._total_files_size
                 self._print_progress(self._upload_progress)
 
@@ -191,7 +243,7 @@ class BackupEngine:
         self._log("[%-20s] %d%%" % ('=' * round(progress * 20), round(100 * progress)))
 
     def _validate_usage(self):
-        if self._files is None:
+        if self._upload_queue is None:
             raise Exception('Must be called inside with statement')
 
     def _get_or_create_folder(self, folder_name, parent_folder_id):
@@ -207,7 +259,7 @@ class BackupEngine:
                 'mimeType': 'application/vnd.google-apps.folder'
             }
             folder_id = self._service.files().create(body=folder_metadata,
-                                                fields='id').execute().get('id')
+                                                     fields='id').execute().get('id')
         else:
             folder_id = items[0]['id']
 
@@ -225,96 +277,64 @@ class BackupEngine:
             and values are id's of these folders.
         '''
         self._validate_usage()
+        node_resolver = Resolver()
         parents_id = {}
         local_folder = os.path.abspath(local_folder)
+        if not os.path.isdir(local_folder):
+            self._error(f'Invalid path supplied. local_folder = {local_folder}. Path must be existing folder.')
+            return
+
         excluded_paths = [os.path.abspath(excluded_path).upper() for excluded_path in configurations.EXCLUDED_PATHS]
 
         destination_folder_id = self._get_or_create_folder(configurations.BACKUP_DESTINATION, 'root')
         self._log(f'backup folder id on Drive: {configurations.BACKUP_DESTINATION}')
 
+        if local_folder.count(os.sep) > 1:
+            local_folder = local_folder.rstrip(os.sep)
+
+        if local_folder.endswith(os.sep):
+            self._log(f'Path to full drive was supplied. local_folder = {local_folder}')
+        elif local_folder.count(os.sep) == 0:
+            self._error(f'Invalid path supplied. local_folder = {local_folder}. Will skip this one.')
+            return
+
         self._log(f'Scan files in folder {local_folder}...')
-        self._total_files_size = self._get_folder_size(local_folder, excluded_paths) + 1
+        self._files_to_upload, self._total_files_size = self._scan_folder(local_folder, excluded_paths)
         self._uploaded_files_size = 0
         self._upload_progress = 0
         self._log(f'Start backup folder {local_folder} ({self._convert_size(self._total_files_size)})...')
         self._print_progress(0)
 
-        for root, folders, files in os.walk(local_folder, topdown=True):
-            root = root.rstrip(os.sep)
-            split_path = root.split(os.sep)
-
-            last_dir_name = None
-            pre_last_dir_name = None
-
-            folders[:] = [d for d in folders if
-                       ((root + os.sep + d).upper() not in excluded_paths and self._is_valid_file(root + os.sep + d))]
-
-            random.shuffle(folders)
-
-            if len(split_path) >= 2:
-                last_dir_name = split_path[-1]
-                pre_last_dir_name = os.sep.join(split_path[:-1])
-            elif len(split_path) >= 1 and local_folder[-1] == os.sep:
-                self._log(f'Path to complete drive was supplied. root = {root}, local_folder = {local_folder}')
-                last_dir_name = split_path[-1]
+        for path_node in PreOrderIter(self._files_to_upload):
+            if path_node.is_file:
+                self._upload_queue.put([path_node])
             else:
-                self._error(f'Invalid path supplied. root = {root}, local_folder = {local_folder}')
-                raise Exception()
+                try:
+                    if path_node.drive_id is None:
+                        path_node.drive_id = self._get_or_create_folder(path_node.name,
+                                                                        destination_folder_id if path_node.is_root else path_node.parent.drive_id)
+                    next_page_token = None
+                    while True:
+                        results = self._service.files().list(
+                            pageSize=configurations.DRIVE_SCAN_PAGE_SIZE, fields="nextPageToken, files",
+                            pageToken=next_page_token, q=f'mimeType = "application/vnd.google-apps.folder" and trashed = false and parents in "{path_node.drive_id}"').execute()
+                        items = results.get('files', [])
 
-            if pre_last_dir_name is None or pre_last_dir_name not in parents_id.keys():
-                pre_last_dir_id = destination_folder_id
-            else:
-                pre_last_dir_id = parents_id[pre_last_dir_name]
+                        for item in items:
+                            try:
+                                node_resolver.get(path_node, item['name'])
+                            except ResolverError:
+                                self._service.files().delete(fileId=item['id']).execute()
+                                self._debug(f'folder deleted {self._get_node_path(path_node) + os.sep + item["name"]}')
 
-            try:
-                folder_id = self._get_or_create_folder(last_dir_name, pre_last_dir_id)
-
-                # Get all files on drive at this path
-                folders_in_drive_folder = {}
-                files_in_drive_folder = {}
-                results = self._service.files().list(
-                    pageSize=100, fields="nextPageToken, files",
-                    q=f'trashed = false and parents in "{folder_id}"').execute()
-                items = results.get('files', [])
-                while items and len(items) > 0:
-                    for item in items:
-                        if item['mimeType'] == 'application/vnd.google-apps.folder':
-                            folders_in_drive_folder[item['name']] = {'id': item['id']}
-                        else:
-                            files_in_drive_folder[item['name']] = {'id': item['id'], 'md5Checksum': item['md5Checksum']}
-                    next_page_token = results.get('nextPageToken', None)
-                    if next_page_token is None:
-                        break
-                    results = self._service.files().list(
-                        pageSize=100, fields="nextPageToken, files",
-                        pageToken=next_page_token, q=f'trashed = false and parents in "{folder_id}"').execute()
-                    items = results.get('files', [])
-
-                # For each local file, upload or update it on drive
-                for name in files:
-                    self._files.put([root, name, folder_id, files_in_drive_folder.pop(name, None)])
-
-                # For each remote file which isn't exist locally, remove it from drive
-                for name, file in files_in_drive_folder.items():
-                    self._service.files().delete(fileId=file['id']).execute()
-                    self._debug(f'file deleted {root + os.sep + name}')
-
-                # For each local folder, allow upload
-                for folder in folders:
-                    folders_in_drive_folder.pop(folder, None)
-
-                # For each remote folder which isn't exist locally, remove it from drive
-                for name, folder in folders_in_drive_folder.items():
-                    self._service.files().delete(fileId=folder['id']).execute()
-                    self._debug(f'folder deleted {root + os.sep + name}')
-
-                last_dir_name = root
-                parents_id[last_dir_name] = folder_id
-            except Exception as e:
-                self._error(f'Failed to backup folder {root} with exception: {e}')
+                        next_page_token = results.get('nextPageToken', None)
+                        if next_page_token is None:
+                            break
+                except Exception as e:
+                    self._error(f'Failed to sync folder {path_node.name} with exception: {e}')
 
         # Wait all workers to empty the queue
-        self._files.join()
+        self._upload_queue.join()
 
         self._log('End Sync')
 
@@ -344,8 +364,20 @@ class BackupEngine:
 
 
 if __name__ == '__main__':
+
+    # logging.basicConfig(level=logging.INFO,
+    #                     format='%(asctime)s - %(message)s',
+    #                     datefmt='%Y-%m-%d %H:%M:%S')
+    # event_handler = LoggingEventHandler()
+    # observer = Observer()
+    # observer.schedule(event_handler, configurations.FOLDERS_TO_BACKUP[0], recursive=True)
+    # observer.start()
+    # time.sleep(10)
+    # observer.stop()
+    # observer.join()
+    # exit()
+
     with BackupEngine() as backup_engine:
         random.shuffle(configurations.FOLDERS_TO_BACKUP)
         for path in configurations.FOLDERS_TO_BACKUP:
             backup_engine.backup_folder(path)
-
