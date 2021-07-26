@@ -1,0 +1,98 @@
+{
+      "kind": "drive#file",
+      "id": "<file drive id>",
+      "name": "<file name>",
+      "mimeType": "application/json",
+      "starred": false,
+      "trashed": false,
+      "explicitlyTrashed": false,
+      "parents": [
+        "<parent drive id>"
+      ],
+      "spaces": [
+        "drive"
+      ],
+      "version": "1",
+      "webContentLink": "https://drive.google.com/uc?id=<file drive id>&export=download",
+      "webViewLink": "https://drive.google.com/file/d/<file drive id>/view?usp=drivesdk",
+      "iconLink": "https://drive-thirdparty.googleusercontent.com/16/type/application/json",
+      "hasThumbnail": false,
+      "thumbnailVersion": "0",
+      "viewedByMe": false,
+      "createdTime": "2021-07-18T15:33:22.484Z",
+      "modifiedTime": "2021-07-21T20:33:26.881Z",
+      "modifiedByMeTime": "2021-07-21T20:33:26.881Z",
+      "modifiedByMe": true,
+      "owners": [
+        {
+          "kind": "drive#user",
+          "displayName": "Steve Jobs",
+          "me": true,
+          "permissionId": "00000000000000000000",
+          "emailAddress": "sjobs@apple.com"
+        }
+      ],
+      "lastModifyingUser": {
+        "kind": "drive#user",
+        "displayName": "Steve Jobs",
+        "me": true,
+        "permissionId": "00000000000000000000",
+        "emailAddress": "sjobs@apple.com"
+      },
+      "shared": false,
+      "ownedByMe": true,
+      "capabilities": {
+        "canAddChildren": false,
+        "canAddMyDriveParent": false,
+        "canChangeCopyRequiresWriterPermission": true,
+        "canChangeSecurityUpdateEnabled": false,
+        "canChangeViewersCanCopyContent": true,
+        "canComment": true,
+        "canCopy": true,
+        "canDelete": true,
+        "canDownload": true,
+        "canEdit": true,
+        "canListChildren": false,
+        "canModifyContent": true,
+        "canMoveChildrenWithinDrive": false,
+        "canMoveItemIntoTeamDrive": true,
+        "canMoveItemOutOfDrive": true,
+        "canMoveItemWithinDrive": true,
+        "canReadRevisions": true,
+        "canRemoveChildren": false,
+        "canRemoveMyDriveParent": true,
+        "canRename": true,
+        "canShare": true,
+        "canTrash": true,
+        "canUntrash": true
+      },
+      "viewersCanCopyContent": true,
+      "copyRequiresWriterPermission": false,
+      "writersCanShare": true,
+      "permissions": [
+        {
+          "kind": "drive#permission",
+          "id": "00000000000000000000",
+          "type": "user",
+          "emailAddress": "sjobs@apple.com",
+          "role": "owner",
+          "displayName": "Steve Jobs",
+          "deleted": false
+        }
+      ],
+      "permissionIds": [
+        "00000000000000000000"
+      ],
+      "originalFilename": "<file name>",
+      "fullFileExtension": "json",
+      "fileExtension": "json",
+      "md5Checksum": "<file md5>",
+      "size": "0",
+      "quotaBytesUsed": "0",
+      "headRevisionId": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      "isAppAuthorized": true,
+      "linkShareMetadata": {
+        "securityUpdateEligible": false,
+        "securityUpdateEnabled": true
+      }
+    }

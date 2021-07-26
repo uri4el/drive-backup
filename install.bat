@@ -1,1 +1,1 @@
-pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib watchdog anytree fastcache
+pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib watchdog anytree fastcache pytest

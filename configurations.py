@@ -1,4 +1,4 @@
-FOLDERS_TO_BACKUP = ['C:\\', 'd:\\'] #case sensetive
+PATHS_TO_BACKUP = ['C:\\', 'd:\\'] #case sensetive
 EXCLUDED_PATHS = ['C:\\Program Files (x86)', 'C:\\Program Files', 'C:\\Windows']
 BACKUP_DESTINATION = 'PCBACKUP'
 PROGRESS_INTERNALS = 1
@@ -9,9 +9,9 @@ LOG_LEVEL = 'INFO' # DEBUG, INFO, ERROR
 FULL_SYNC_EVERY = 14 * 24 * 60 * 60
 
 #Test values
-FOLDERS_TO_BACKUP = ['C:\\drive-backup', 'C:\\ATI']
+PATHS_TO_BACKUP = ['C:\\drive-backup', 'C:\\ATI']
 BACKUP_DESTINATION = 'PCBACKUPTEMP'
 WORKERS = 3
-DRIVE_SCAN_PAGE_SIZE = 100
+DRIVE_SCAN_PAGE_SIZE = 2
 LOG_LEVEL = 'DEBUG'
 FULL_SYNC_EVERY = 1 * 60

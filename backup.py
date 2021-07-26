@@ -1,7 +1,6 @@
 from __future__ import print_function
 
 import hashlib
-import logging
 import math
 import mimetypes
 import os
@@ -15,14 +14,14 @@ import time
 import traceback
 from datetime import datetime
 
+from anytree import Node, Resolver, ResolverError, PreOrderIter
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
-from watchdog.events import LoggingEventHandler, FileSystemEventHandler
-from anytree import Node, Resolver, ResolverError, PreOrderIter
 
 import configurations
 
@@ -67,118 +66,185 @@ class Logger:
 
 
 class FileChangeEventHandler(FileSystemEventHandler):
-    def __init__(self, context, excluded_paths):
-        self._context = context
-        self._excluded_paths = excluded_paths
+    def __init__(self, on_created_event_handler, on_file_deleted_event_handler, on_file_modified_event_handler, on_file_moved_event_handler):
+        self._on_created_event_handler = on_created_event_handler
+        self._on_deleted_event_handler = on_file_deleted_event_handler
+        self._on_modified_event_handler = on_file_modified_event_handler
+        self._on_moved_event_handler = on_file_moved_event_handler
 
     def on_created(self, event):
-        Logger.debug(f'{"folder" if event.is_directory else "file"} created {event.src_path}')
-        #eturn
-        if not self._context._is_valid_file(event.src_path):
-            Logger.debug(f'{"folder" if event.is_directory else "file"} skipped since it invalid {event.src_path}')
-            return
-        for excluded_path in self._excluded_paths:
-            if event.src_path.upper().startswith(excluded_path + os.sep):
-                Logger.debug(f'{"folder" if event.is_directory else "file"} skipped since it is in excluded paths {event.src_path}')
-                return
-        with SyncWorkerLocker(self._context._workers):
-            node_resolver = Resolver()
-            parent_node = self._context._files_tree
-            folders_in_path = event.src_path.strip(os.sep).split(os.sep)
-            for i in range(len(folders_in_path)):
-                try:
-                    parent_node = node_resolver.get(parent_node.root, os.sep + os.sep.join(folders_in_path[:i+1]))
-                except:
-                    parent_node = Node(folders_in_path[i], parent=parent_node, size=0, drive_id=None, is_file=False)
-            parent_node.is_file = not event.is_directory
-
-            if parent_node.is_file:
-                self._context._upload_queue.put([parent_node])
-            else:
-                parent_node.drive_id = self._context._get_or_create_folder(parent_node.name, parent_node.parent.drive_id)
+        for i in range(configurations.UPLOAD_RETRIES):
+            try:
+                self._on_created_event_handler(event.src_path, not event.is_directory)
+                break
+            except Exception as e:
+                if i == configurations.UPLOAD_RETRIES - 1:
+                    Logger.error(f'Failed to backup file {event.src_path} with exception: {e}')
+                else:
+                    Logger.debug(f'file upload failed (try #{i}) {event.src_path}')
 
     def on_deleted(self, event):
-        Logger.debug(f'{"folder" if event.is_directory else "file"} deleted {event.src_path}')
+        for i in range(configurations.UPLOAD_RETRIES):
+            try:
+                self._on_deleted_event_handler(event.src_path, not event.is_directory)
+                break
+            except Exception as e:
+                if i == configurations.UPLOAD_RETRIES - 1:
+                    Logger.error(f'Failed to delete file {event.src_path} with exception: {e}')
+                else:
+                    Logger.debug(f'file delete failed (try #{i}) {event.src_path}')
 
     def on_modified(self, event):
-        Logger.debug(f'{"folder" if event.is_directory else "file"} modified {event.src_path}')
+        for i in range(configurations.UPLOAD_RETRIES):
+            try:
+                self._on_modified_event_handler(event.src_path, not event.is_directory)
+                break
+            except Exception as e:
+                if i == configurations.UPLOAD_RETRIES - 1:
+                    Logger.error(f'Failed to update modified file {event.src_path} with exception: {e}')
+                else:
+                    Logger.debug(f'file update failed (try #{i}) {event.src_path}')
 
     def on_moved(self, event):
-        Logger.debug(f'{"folder" if event.is_directory else "file"} moved from {event.src_path} to {event.dest_path}')
+        for i in range(configurations.UPLOAD_RETRIES):
+            try:
+                self._on_moved_event_handler(event.src_path, event.dest_path, not event.is_directory)
+                break
+            except Exception as e:
+                if i == configurations.UPLOAD_RETRIES - 1:
+                    Logger.error(f'Failed to move file from {event.src_path} to {event.dest_path} with exception: {e}')
+                else:
+                    Logger.debug(f'file move from {event.src_path} to {event.dest_path} failed (try #{i})')
+
 
 class SyncWorker(threading.Thread):
-    def __init__(self, name, context):
+
+    SyncWorkerCounter = 0
+
+    def __init__(self, work_locker, work_active, work_queue, work_to_do):
         super(SyncWorker, self).__init__()
-        self.name = name
-        self.mutex = threading.Lock()
-        self.context = context
+        self._work_locker = work_locker
+        self._work_active = work_active
+        self._work_queue = work_queue
+        self._work_to_do = work_to_do
+
+        SyncWorker.SyncWorkerCounter += (SyncWorker.SyncWorkerCounter + 1) % configurations.WORKERS
+        self.name = f'SyncWorker-{SyncWorker.SyncWorkerCounter}'
 
     def run(self):
-        while self.context._workers_active:
-            item = self.context._upload_queue.get()
+        while self._work_active:
+            item = self._work_queue.get()
             if item is None:
                 break
+
             try:
-                with self.mutex:
-                    self.context._upload_file(*item)
+                self._work_locker.acquire_one()
+                self._work_to_do(*item)
             except Exception as e:
                 Logger.error(f'Failed to sync file {item} with exception: {e}')
+            finally:
+                self._work_locker.release_one()
 
-            self.context._upload_queue.task_done()
+            self._work_queue.task_done()
 
 
 class SyncWorkerLocker:
-    def __init__(self, sync_workers):
-        self.sync_workers = sync_workers
+    def __init__(self):
+        self._semaphore = threading.Semaphore(configurations.WORKERS)
 
     def __enter__(self):
-        for worker in self.sync_workers:
-            worker.mutex.acquire()
+        self.acquire_all()
+        return self
 
     def __exit__(self, exc_type, exc_value, tb):
-        for worker in self.sync_workers:
-            worker.mutex.release()
+        self.release_all()
 
         if exc_type is not None:
             traceback.print_exception(exc_type, exc_value, tb)
         return True
 
+    def acquire_one(self):
+        self._semaphore.acquire()
+
+    def release_one(self):
+        self._semaphore.release()
+
+    def acquire_all(self):
+        for _ in range(configurations.WORKERS):
+            self._semaphore.acquire()
+
+    def release_all(self):
+        for _ in range(configurations.WORKERS):
+            self._semaphore.release()
+
 
 class BackupEngine:
-    def __init__(self, folders_to_backup, excluded_paths, backup_destination):
+    def _TMP_TEST(self):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+        service = build('drive', 'v3', credentials=self._get_creds())
+        files = service.files()
+        req = files.list(
+            pageSize=1, fields="files",
+            q=f'name = "data_file2.html" and trashed = false and parents in "\\C:\\drive-backup\\test_data\\data_folder1"')
+        res = req.execute()
+
+        media = MediaFileUpload(
+            'C:\\drive-backup\\backup.py',
+            mimetype=mimetypes.MimeTypes().guess_type('backup.py')[0],
+            resumable=True)
+
+        service.files().update(
+            fileId='\\C:\\drive-backup\\test_data\\data_file1.txt',
+            body={},
+            media_body=media).execute()
+        return None
+
+    def __init__(self, paths_to_backup: list, excluded_paths: list, backup_destination: str):
+        #self._TMP_TEST()
+
         self._file_changed_observer = None
-        self._workers_active = False
+        self._work_active = False
         self._upload_queue = None
         self._files_tree = None
         self._total_files_size = 0
         self._uploaded_files_size = 0
         self._upload_progress = 0
         self._destination_folder_id = None
-        self._folders_to_backup = folders_to_backup
-        self._excluded_paths = excluded_paths
+        # TODO: verify logic for support excluding single file
+        self._excluded_paths = [os.path.abspath(f) for f in excluded_paths if os.path.exists(f)]
+        # TODO: remove nested paths
+        self._paths_to_backup = [os.path.abspath(p) for p in paths_to_backup if self._is_valid_path(p)]
         self._backup_destination = backup_destination
+        self._workers = []
+        self._workers_locker = None
+
+        if not self._backup_destination:
+            raise ValueError(f'Empty backup destination supplied: {backup_destination}')
+        if len(self._paths_to_backup) == 0:
+            raise ValueError(f'Cannot find valid non-excluded path to backup here: {paths_to_backup} (excluded paths: {excluded_paths})')
 
     def __enter__(self):
         self._workers = []
         self._upload_queue = queue.Queue()
-        self._workers_active = True
+        self._work_active = True
         self._total_files_size = 0
         self._uploaded_files_size = 0
         self._upload_progress = 0
         self._create_workers()
 
-        self._scan_all_folders()
+        self._scan_all_paths()
 
-        event_handler = FileChangeEventHandler(self, self._excluded_paths)
+        event_handler = FileChangeEventHandler(self._on_file_created, self._on_file_deleted, self._on_file_modified, self._on_file_moved)
         self._file_changed_observer = Observer()
-        for folder in self._folders_to_backup:
-            self._file_changed_observer.schedule(event_handler, folder, recursive=True)
+        # TODO: check what happen if path was deleted and you schedlue event handler for it
+        for path in self._paths_to_backup:
+            self._file_changed_observer.schedule(event_handler, path, recursive=True)
         self._file_changed_observer.start()
 
         return self
 
     def __exit__(self, exc_type, exc_value, tb):
-        self._workers_active = False
+        self._work_active = False
         for i in range(configurations.WORKERS):
             self._upload_queue.put(None)
 
@@ -190,24 +256,114 @@ class BackupEngine:
             self._uploaded_files_size = 0
             self._upload_progress = 0
 
-        self._files_tree = None
-        self._upload_queue = None
-        self._workers = []
-
         self._file_changed_observer.stop()
         self._file_changed_observer.join()
         self._file_changed_observer = None
 
+        self._files_tree = None
+        self._upload_queue = None
+        self._workers = []
+        self._workers_locker = None
         self._destination_folder_id = None
-
 
         if exc_type is not None:
             traceback.print_exception(exc_type, exc_value, tb)
         return True
 
+    def _is_path_excluded(self, path):
+        path = os.path.abspath(path)
+        for excluded_path in self._excluded_paths:
+            if path == excluded_path:
+                return True
+            if os.path.normcase(path).startswith(os.path.normcase(excluded_path) + os.sep):
+                return True
+        return False
+
+    def _on_file_created(self, path, is_file):
+        Logger.debug(f'{"file" if is_file else "folder"} created {path}')
+
+        if not self._is_valid_path(path):
+            Logger.debug(f'{"file" if is_file else "folder"} skipped since it invalid {path}')
+            return
+
+        with self._workers_locker:
+            node_resolver = Resolver()
+            parent_node = self._files_tree
+            folders_in_path = path.strip(os.sep).split(os.sep)
+            for i in range(len(folders_in_path)):
+                try:
+                    parent_node = node_resolver.get(parent_node.root, os.sep + os.sep.join(folders_in_path[:i + 1]))
+                except:
+                    parent_node = Node(folders_in_path[i], parent=parent_node, size=0, drive_id=None, is_file=False)
+            parent_node.is_file = is_file
+
+            if parent_node.is_file:
+                self._upload_queue.put([parent_node])
+            else:
+                parent_node.drive_id = self._get_or_create_folder(parent_node.name,
+                                                                           parent_node.parent.drive_id)
+
+    def _on_file_deleted(self, path, is_file):
+        Logger.debug(f'{"file" if is_file else "folder"} deleted {path}')
+        if self._is_path_excluded(path):
+            return
+        service = build('drive', 'v3', credentials=self._get_creds())
+        with self._workers_locker:
+            node_resolver = Resolver()
+            parent_node = self._files_tree
+            # TODO: move it to separate method
+            folders_in_path = path.strip(os.sep).split(os.sep)
+            for i in range(len(folders_in_path)):
+                try:
+                    parent_node = node_resolver.get(parent_node.root, os.sep + os.sep.join(folders_in_path[:i + 1]))
+                except:
+                    parent_node = None
+                    break
+
+            if parent_node:
+                parent_node.parent.children.remove(parent_node)
+                if parent_node.parent.drive_id is not None:
+                    results = service.files().list(
+                        pageSize=1, fields="files",
+                        q=f'name = "{parent_node.name}" and trashed = false and parents in "{parent_node.parent.drive_id}"').execute()
+                    items = results.get('files', [])
+                    if len(items) > 0:
+                        item = items[0]
+                        service.files().delete(fileId=item['id']).execute()
+                        Logger.debug(
+                            f'file {path} deleted from drive.')
+
+    def _on_file_modified(self, path, is_file):
+        Logger.debug(f'{"file" if is_file else "folder"} modified {path}')
+
+        if not self._is_valid_path(path):
+            Logger.debug(f'{"file" if is_file else "folder"} skipped since it invalid {path}')
+            self._on_file_deleted(path, is_file)
+            return
+
+        if is_file:
+            with self._workers_locker:
+                node_resolver = Resolver()
+                parent_node = self._files_tree
+                folders_in_path = path.strip(os.sep).split(os.sep)
+                for i in range(len(folders_in_path)):
+                    try:
+                        parent_node = node_resolver.get(parent_node.root, os.sep + os.sep.join(folders_in_path[:i + 1]))
+                    except:
+                        parent_node = Node(folders_in_path[i], parent=parent_node, size=0, drive_id=None, is_file=False)
+                parent_node.is_file = True
+                self._upload_queue.put([parent_node])
+
+    def _on_file_moved(self, src_path, dest_path, is_file):
+        Logger.debug(f'{"file" if is_file else "folder"} moved from {src_path} to {dest_path}')
+        self._on_file_deleted(src_path, is_file)
+        self._on_file_created(dest_path, is_file)
+
+
     def _create_workers(self):
+        self._workers_locker = SyncWorkerLocker()
         for i in range(configurations.WORKERS):
-            thread = SyncWorker(name=i, context=self)
+            thread = SyncWorker(self._workers_locker, self._work_active, self._upload_queue, self._upload_file)
             self._workers.append(thread)
             thread.start()
 
@@ -248,34 +404,46 @@ class BackupEngine:
         s = round(size_bytes / p, 2)
         return "%s %s" % (s, size_name[i])
 
-    def _is_valid_file(self, file_path):
+    def _is_valid_path(self, path):
+        path = os.path.abspath(path)
         try:
-            return not bool(
-                os.stat(file_path).st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN) and not os.path.basename(
-                os.path.abspath(file_path)).startswith('.') and not os.path.islink(
-                file_path) and os.access(file_path, os.R_OK)
+            return os.path.exists(path) \
+                   and not bool(os.stat(path).st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN) \
+                   and not os.path.basename(os.path.abspath(path)).startswith('.') \
+                   and not os.path.islink(path) \
+                   and os.access(path, os.R_OK) \
+                   and (path.count(os.sep) > 0 or os.path.isfile(path)) \
+                   and not self._is_path_excluded(path)
         except:
             return False
 
-    def _scan_folder(self, folder_path, parent_node, excluded_paths):
+    def _scan_path(self, path):
+        #TODO: test singel file backup, single file excluded path, test nested backup folders
+
+        if not self._is_valid_path(path):
+            Logger.error(f'path does not exist {path}')
+            return
+
         node_resolver = Resolver()
         total_size = 0
-
+        parent_node = self._files_tree
         current_path = ''
-        for folder_name in folder_path.strip(os.sep).split(os.sep):
-            current_path += folder_name
+        for folder_name_in_path in path.strip(os.sep).split(os.sep):
+            current_path += folder_name_in_path
             try:
                 parent_node = node_resolver.get(parent_node.root, os.sep + current_path)
             except:
-                parent_node = Node(folder_name, parent=parent_node, size=0, drive_id=None, is_file=False)
+                parent_node = Node(folder_name_in_path, parent=parent_node, size=0, drive_id=None, is_file=False)
 
-        for root, folders, files in os.walk(folder_path, topdown=True):
+        if os.path.isfile(path):
+            parent_node.is_file = True
+            parent_node.file_size = os.path.getsize(path)
+
+        for root, folders, files in os.walk(path, topdown=True):
             root = root.rstrip(os.sep)
-            folders[:] = [d for d in folders if
-                          ((root + os.sep + d).upper() not in [os.path.abspath(excluded_path).upper() for excluded_path in excluded_paths] and self._is_valid_file(
-                              root + os.sep + d))]
+            folders[:] = [d for d in folders if self._is_valid_path(root + os.sep + d)]
             random.shuffle(folders)
-
+            # TODO: search for os.sep and strip
             try:
                 parent_node = node_resolver.get(parent_node.root, os.sep + root.lstrip(os.sep))
             except ResolverError:
@@ -284,9 +452,9 @@ class BackupEngine:
                 parent_node = Node(os.path.basename(root), parent=parent_node, size=0, drive_id=None, is_file=False)
 
             for name in files:
+                # TODO: only do it for new created nodes.
                 file_path = root + os.sep + name
-                # skip if it is symbolic link
-                if self._is_valid_file(file_path):
+                if self._is_valid_path(file_path):
                     file_size = os.path.getsize(file_path)
                     parent_node.size += file_size
                     Node(name, parent=parent_node, size=file_size, drive_id=None, is_file=True)
@@ -317,7 +485,7 @@ class BackupEngine:
                     path_node.drive_id = item['id']
                     file_checksum = item['md5Checksum']
 
-        if path_node.parent.drive_id is not None and self._is_valid_file(file_path):
+        if path_node.parent.drive_id is not None and self._is_valid_path(file_path):
             for i in range(configurations.UPLOAD_RETRIES):
                 try:
                     media = MediaFileUpload(
@@ -361,13 +529,13 @@ class BackupEngine:
 
     def _validate_usage(self):
         if self._upload_queue is None:
-            raise Exception('Must be called inside with statement')
+            raise RuntimeError('Must be called inside with statement')
 
     def _get_or_create_folder(self, folder_name, parent_folder_id):
         service = build('drive', 'v3', credentials=self._get_creds())
 
         results = service.files().list(
-            pageSize=10, fields="nextPageToken, files",
+            pageSize=1, fields="nextPageToken, files",
             q=f'name = "{folder_name}" and trashed = false and parents in "{parent_folder_id}"').execute()
         items = results.get('files', [])
         folder_id = None
@@ -384,23 +552,20 @@ class BackupEngine:
 
         return folder_id
 
-    def _scan_all_folders(self):
-        random.shuffle(self._folders_to_backup)
-        self._folders_to_backup = [os.path.abspath(local_folder) for local_folder in self._folders_to_backup if
-                         os.path.isdir(local_folder) and local_folder.count(os.sep) > 0]
+    def _scan_all_paths(self):
+        random.shuffle(self._paths_to_backup)
         # TODO make sure there isn't overlap, remove last slash, case insensitive in paths for windows only, single file as backup folder
 
         self._destination_folder_id = self._get_or_create_folder(self._backup_destination, 'root')
         Logger.info(f'backup folder id on Drive: {self._backup_destination}')
 
-        Logger.info(f'Scan files in folders {self._folders_to_backup}...')
-        for local_folder in self._folders_to_backup:
-            self._files_tree, total_files_size = self._scan_folder(local_folder, self._files_tree, self._excluded_paths)
+        Logger.info(f'Scan files in paths {self._paths_to_backup}...')
+        for path in self._paths_to_backup:
+            self._files_tree, total_files_size = self._scan_path(path)
             self._total_files_size += total_files_size
 
-    def backup_folders(self):
-        '''Uploads folder and all it's content (if it doesnt exists)
-        in root folder.
+    def backup_paths(self):
+        '''Uploads paths and all it's content to Drive
         '''
         self._validate_usage()
         service = build('drive', 'v3', credentials=self._get_creds())
@@ -408,7 +573,7 @@ class BackupEngine:
 
         self._uploaded_files_size = 0
         self._upload_progress = 0
-        Logger.info(f'Start backup folders {self._folders_to_backup} ({self._convert_size(self._total_files_size)})...')
+        Logger.info(f'Start backup paths {self._paths_to_backup} ({self._convert_size(self._total_files_size)})...')
         Logger.print_progress(0)
 
         if self._files_tree is None:
@@ -435,7 +600,7 @@ class BackupEngine:
                                     node_resolver.get(path_node, item['name'])
                                 except ResolverError:
                                     service.files().delete(fileId=item['id']).execute()
-                                    Logger.debug(f'folder deleted {self._get_node_path(path_node) + os.sep + item["name"]}')
+                                    Logger.debug(f'path deleted {self._get_node_path(path_node) + os.sep + item["name"]}')
 
                             next_page_token = results.get('nextPageToken', None)
                             if next_page_token is None:
@@ -456,7 +621,7 @@ class BackupEngine:
 
 
 if __name__ == '__main__':
-    with BackupEngine(configurations.FOLDERS_TO_BACKUP, configurations.EXCLUDED_PATHS, configurations.BACKUP_DESTINATION) as backup_engine:
+    with BackupEngine(configurations.PATHS_TO_BACKUP, configurations.EXCLUDED_PATHS, configurations.BACKUP_DESTINATION) as backup_engine:
         while True:
-            backup_engine.backup_folders()
+            backup_engine.backup_paths()
             backup_engine.monitor_filesystem(configurations.FULL_SYNC_EVERY)
