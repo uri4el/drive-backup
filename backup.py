@@ -94,6 +94,7 @@ class FileChangeEventHandler(FileSystemEventHandler):
                 else:
                     Logger.debug(f'file delete failed (try #{i}) {event.src_path}')
 
+
     def on_modified(self, event):
         for i in range(configurations.UPLOAD_RETRIES):
             try:
@@ -158,10 +159,9 @@ class SyncWorkerLocker:
 
     def __exit__(self, exc_type, exc_value, tb):
         self.release_all()
-
         if exc_type is not None:
             traceback.print_exception(exc_type, exc_value, tb)
-        return True
+        return False
 
     def acquire_one(self):
         self._semaphore.acquire()
@@ -300,11 +300,13 @@ class BackupEngine:
                     break
 
             if parent_node:
-                parent_node.parent.children.remove(parent_node)
-                if parent_node.parent.drive_id is not None:
+                name = parent_node.name
+                parent_node_drive_id = parent_node.parent.drive_id
+                parent_node.parent.children = [n for n in parent_node.parent.children if n != parent_node]
+                if parent_node_drive_id is not None:
                     results = service.files().list(
                         pageSize=1, fields="files",
-                        q=f'name = "{parent_node.name}" and trashed = false and parents in "{parent_node.parent.drive_id}"').execute()
+                        q=f'name = "{name}" and trashed = false and parents in "{parent_node_drive_id}"').execute()
                     items = results.get('files', [])
                     if len(items) > 0:
                         item = items[0]

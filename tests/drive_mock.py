@@ -19,11 +19,11 @@ class DriveMock:
 
     def __init__(self, monkeypatch, folder_path_to_simulate=None):
         self._rd = random.Random()
-        self._files_tree = None
-        self.set_simulated_files_tree(folder_path_to_simulate)
-
-        self.Credentials = DriveMock.CredentialsMock()
-        self.build = self._build
+        self.files_tree = self.get_simulated_files_tree(folder_path_to_simulate)
+        self._overridden_attributes = {
+            'Credentials': DriveMock.CredentialsMock(),
+            'build': self._build
+        }
 
         self._init_mock(monkeypatch)
 
@@ -55,15 +55,14 @@ class DriveMock:
     def _uuid(self):
         return str(uuid.UUID(int=self._rd.getrandbits(128)))
 
-    def set_simulated_files_tree(self, folder_path_to_simulate=None):
+    def get_simulated_files_tree(self, folder_path_to_simulate=None):
         self._rd.seed(0)
         parent_node = Node('root', size=0, drive_id='root', is_file=False)
         parent_node = Node(DriveMock.TEST_DATA_FOLDER_DRIVE_NAME, parent=parent_node, size=0, drive_id=self._uuid(),
                            is_file=False)
 
         if not folder_path_to_simulate:
-            self._files_tree = parent_node.root
-            return
+            return parent_node.root
 
         folder_path_to_simulate = os.path.abspath(folder_path_to_simulate)
         for folder_name_in_path in folder_path_to_simulate.strip(os.sep).split(os.sep):
@@ -74,8 +73,7 @@ class DriveMock:
             parent_node.is_file = True
             with open(os.path.abspath(folder_path_to_simulate), "r") as f:
                 parent_node.content = f.read()
-                self._files_tree = parent_node.root
-                return
+                return parent_node.root
 
         ids = {folder_path_to_simulate: parent_node.drive_id}
         for root, folders, files in os.walk(folder_path_to_simulate, topdown=True):
@@ -95,15 +93,14 @@ class DriveMock:
                 with open(root + os.sep + name, "r") as f:
                     Node(name, parent=parent_node, size=0, drive_id=self._uuid(), is_file=True, content=f.read())
 
-        self._files_tree = parent_node.root
+        return parent_node.root
 
     def _init_mock(self, monkeypatch):
-        for mock_name, mock in self.__dict__.items():
-            if not mock_name.startswith('_'):
-                monkeypatch.setattr(f'backup.{mock_name}', mock)
+        for mock_name, mock in self._overridden_attributes.items():
+            monkeypatch.setattr(f'backup.{mock_name}', mock)
 
     def _build(self, serviceName, version, credentials):
-        return DriveMock.ServiceMock(self._files_tree, self._uuid)
+        return DriveMock.ServiceMock(self.files_tree, self._uuid)
 
     class CredentialsMock:
         def __init__(self):
@@ -148,11 +145,9 @@ class DriveMock:
                 self.create = self._create
                 self.update = self._update
 
-            def _md5(self, file_name):
+            def _md5(self, content):
                 hash_md5 = hashlib.md5()
-                with open(file_name, "rb") as f:
-                    for chunk in iter(lambda: f.read(4096), b""):
-                        hash_md5.update(chunk)
+                hash_md5.update(content.encode('utf-8'))
                 return hash_md5.hexdigest()
 
             def _list(self, pageSize=None, fields=None, pageToken=None, q=None):
