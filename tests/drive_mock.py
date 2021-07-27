@@ -13,24 +13,64 @@ import uuid, random
 from googleapiclient.http import MediaFileUpload
 import copy
 
+
 class DriveMock:
     TEST_DATA_FOLDER_DRIVE_NAME = 'TEST'
 
     def __init__(self, folder_path_to_simulate=None):
         self._rd = random.Random()
-        self._rd.seed(0)
         self._files_tree = None
         self.set_simulated_files_tree(folder_path_to_simulate)
 
         self.Credentials = DriveMock.CredentialsMock()
         self.build = self._build
 
+    def compare_drive_trees(self, drive_tree_1, drive_tree_2, compare_drive_id=False, compare_file_content=True):
+
+        if not drive_tree_1 and not drive_tree_2:
+            return True
+
+        if (drive_tree_1 and not drive_tree_2) or (not drive_tree_1 and drive_tree_2):
+            return False
+
+        if drive_tree_1.name != drive_tree_2.name or drive_tree_1.is_file != drive_tree_2.is_file \
+                or (compare_drive_id and drive_tree_1.drive_id != drive_tree_2.drive_id):
+            return False
+        if compare_file_content and drive_tree_1.is_file:
+            if drive_tree_1.size != drive_tree_2.size or drive_tree_1.content != drive_tree_2.content:
+                return False
+
+        if len(drive_tree_1.children) != len(drive_tree_2.children):
+            return False
+
+        if len(drive_tree_1.children) == 0:
+            return True
+        else:
+            for child_1 in drive_tree_1.children:
+                match_found = any([self.compare_drive_trees(child_1, child_2, compare_drive_id, compare_file_content) for child_2 in drive_tree_2.children])
+                return match_found
+
     def _uuid(self):
         return str(uuid.UUID(int=self._rd.getrandbits(128)))
 
-    def set_simulated_files_tree(self, folder_path_to_simulate):
+    # def get_tree_copy(self):
+    #     new_node = None
+    #     for original_node in PreOrderIter(self._files_tree):
+    #         if not new_node:
+    #             new_node = Node(original_node.name, size=original_node.size, drive_id=original_node.drive_id, is_file=original_node.is_file)
+    #         else:
+    #             parent_node = cachedsearch.find_by_attr(new_node.root, name='drive_id', value=original_node.parent.drive_id)
+    #             new_node = Node(original_node.name, parent=parent_node, size=original_node.size,
+    #                             drive_id=original_node.drive_id, is_file=original_node.is_file)
+    #             if original_node.is_file:
+    #                 new_node = new_node.content = original_node.content
+    #     return new_node.root
+
+    def set_simulated_files_tree(self, folder_path_to_simulate=None):
+        self._rd.seed(0)
         parent_node = Node('root', size=0, drive_id='root', is_file=False)
-        parent_node = Node(DriveMock.TEST_DATA_FOLDER_DRIVE_NAME, parent=parent_node, size=0, drive_id=self._uuid(), is_file=False)
+        parent_node = Node(DriveMock.TEST_DATA_FOLDER_DRIVE_NAME, parent=parent_node, size=0, drive_id=self._uuid(),
+                           is_file=False)
 
         if not folder_path_to_simulate:
             self._files_tree = parent_node.root
@@ -74,7 +114,7 @@ class DriveMock:
                 monkeypatch.setattr(f'backup.{mock_name}', mock)
 
     def _build(self, serviceName, version, credentials):
-        return DriveMock.ServiceMock(self._files_tree)
+        return DriveMock.ServiceMock(self._files_tree, self._uuid)
 
     class CredentialsMock:
         def __init__(self):
@@ -99,18 +139,20 @@ class DriveMock:
 
     class ServiceMock:
 
-        def __init__(self, files_tree):
+        def __init__(self, files_tree, uuid_method):
             self._files_tree = files_tree
+            self._uuid = uuid_method
 
             self.files = self._files
 
         def _files(self):
-            return DriveMock.ServiceMock.FilesMock(self._files_tree)
+            return DriveMock.ServiceMock.FilesMock(self._files_tree, self._uuid)
 
         class FilesMock:
 
-            def __init__(self, files_tree):
+            def __init__(self, files_tree, uuid_method):
                 self._files_tree = files_tree
+                self._uuid = uuid_method
 
                 self.list = self._list
                 self.delete = self._delete
@@ -145,7 +187,7 @@ class DriveMock:
                 # TODO: add file sizing
                 res = [node for node in parent_node.children if not name or node.name == name]
                 pageToken = pageToken or 0
-                nextPageToken = pageToken+pageSize
+                nextPageToken = pageToken + pageSize
                 if 'nextPageToken' in fields:
                     res_dict['nextPageToken'] = nextPageToken if nextPageToken < len(res) else None
 
@@ -153,13 +195,16 @@ class DriveMock:
                 if 'files' in fields:
                     for node in res:
                         if node.is_file:
-                            with open(f'tests{os.sep}mock_data_file.json',) as t:
+                            with open(f'tests{os.sep}mock_data_file.json', ) as t:
                                 mock_data_file_template = json.load(t)
                                 mock_data_file_template['id'] = node.drive_id
                                 mock_data_file_template['name'] = node.name
-                                mock_data_file_template['parents'] = [os.sep.join([''] + [node.name for node in node.parent.path]) if node.parent else 'root']
-                                mock_data_file_template['webContentLink'] = f'https://drive.google.com/uc?id={node.drive_id}&export=download'
-                                mock_data_file_template['webViewLink'] = f'https://drive.google.com/file/d/{node.drive_id}/view?usp=drivesdk'
+                                mock_data_file_template['parents'] = [os.sep.join(
+                                    [''] + [node.name for node in node.parent.path]) if node.parent else 'root']
+                                mock_data_file_template[
+                                    'webContentLink'] = f'https://drive.google.com/uc?id={node.drive_id}&export=download'
+                                mock_data_file_template[
+                                    'webViewLink'] = f'https://drive.google.com/file/d/{node.drive_id}/view?usp=drivesdk'
                                 mock_data_file_template['originalFilename'] = node.name
                                 mock_data_file_template['md5Checksum'] = self._md5(node.content)
                                 res_dict['files'].append(mock_data_file_template)
@@ -168,8 +213,10 @@ class DriveMock:
                                 mock_data_folder_template = json.load(t)
                                 mock_data_folder_template['id'] = node.drive_id
                                 mock_data_folder_template['name'] = node.name
-                                mock_data_folder_template['parents'] = [os.sep.join([''] + [node.name for node in node.parent.path]) if node.parent else 'root']
-                                mock_data_folder_template['webViewLink'] = f'https://drive.google.com/file/d/{node.drive_id}/view?usp=drivesdk'
+                                mock_data_folder_template['parents'] = [os.sep.join(
+                                    [''] + [node.name for node in node.parent.path]) if node.parent else 'root']
+                                mock_data_folder_template[
+                                    'webViewLink'] = f'https://drive.google.com/file/d/{node.drive_id}/view?usp=drivesdk'
                                 res_dict['files'].append(mock_data_folder_template)
 
                 return DriveMock.ServiceMock.FilesMock.RequestMock(res_dict)
@@ -191,13 +238,13 @@ class DriveMock:
                     file_path = os.path.abspath(media_body._filename)
                     with open(file_path, "r") as f:
                         new_node = Node(name, parent=parent_node, size=0, drive_id=self._uuid(),
-                                           is_file=True, content=f.read())
+                                        is_file=True, content=f.read())
                 else:  # It's a folder
                     new_node = Node(name, parent=parent_node, size=0, drive_id=self._uuid(),
-                                       is_file=False)
+                                    is_file=False)
 
                 return DriveMock.ServiceMock.FilesMock.RequestMock({'id': new_node.drive_id})
-                #os.sep.join([''] + [node.name for node in parent_node.path])
+                # os.sep.join([''] + [node.name for node in parent_node.path])
 
             def _update(self, fileId, body, media_body):
                 node = cachedsearch.find_by_attr(self._files_tree, name='drive_id', value=fileId)
@@ -213,5 +260,3 @@ class DriveMock:
 
                 def _execute(self):
                     return copy.deepcopy(self._res_dict)
-
-

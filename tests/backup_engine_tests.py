@@ -1,9 +1,11 @@
+import json
 import os
 import shutil
 import traceback
 import socket
 
 import pytest
+import copy
 
 import backup
 from tests.drive_mock import DriveMock
@@ -98,9 +100,27 @@ class TestBackupEngine:
 
     def test_backup_paths_sanity(self, drive_mock):
         with DummyFileGenerator() as tree:
+            # TESTCASE no change sync
+            original_tree = copy.deepcopy(drive_mock._files_tree)
             with backup.BackupEngine([tree.get_base_folder_path()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
                 be.backup_paths()
-            return None
+                assert drive_mock.compare_drive_trees(original_tree, drive_mock._files_tree)
+
+            # TESTCASE sync from scratch
+            drive_mock.set_simulated_files_tree()
+            with backup.BackupEngine([tree.get_base_folder_path()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
+                be.backup_paths()
+                assert drive_mock.compare_drive_trees(original_tree, drive_mock._files_tree)
+
+                # TESTCASE no re-upload after re-calling backup_paths when no need
+                original_tree = copy.deepcopy(drive_mock._files_tree)
+                be.backup_paths()
+                assert drive_mock.compare_drive_trees(original_tree, drive_mock._files_tree, compare_drive_id=True)
+
+            # TESTCASE no re-upload after re-calling backup_paths and __enter__/__exit__ when no need
+            with backup.BackupEngine([tree.get_base_folder_path()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
+                be.backup_paths()
+                assert drive_mock.compare_drive_trees(original_tree, drive_mock._files_tree, compare_drive_id=True)
 
     def test_backup_paths_error(self, drive_mock):
         with DummyFileGenerator() as tree:
@@ -124,8 +144,8 @@ class TestBackupEngine:
             be = backup.BackupEngine([tree.get_base_folder_path(), tree.get_non_existent_file()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME)
             be = backup.BackupEngine([tree.get_base_folder_path()], [tree.get_non_existent_folder(), tree.get_non_existent_file()], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME)
             be = backup.BackupEngine([tree.get_base_folder_path()], [tree.get_sub_folder_path()], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME)
-            #with be:
-            #    pass
+            with be:
+                pass
 
     def test_init_error(self):
         with DummyFileGenerator() as tree:

@@ -244,6 +244,10 @@ class BackupEngine:
         return self
 
     def __exit__(self, exc_type, exc_value, tb):
+        self._file_changed_observer.stop()
+        self._file_changed_observer.join()
+        self._file_changed_observer = None
+
         self._work_active = False
         for i in range(configurations.WORKERS):
             self._upload_queue.put(None)
@@ -256,10 +260,6 @@ class BackupEngine:
             self._uploaded_files_size = 0
             self._upload_progress = 0
 
-        self._file_changed_observer.stop()
-        self._file_changed_observer.join()
-        self._file_changed_observer = None
-
         self._files_tree = None
         self._upload_queue = None
         self._workers = []
@@ -268,6 +268,7 @@ class BackupEngine:
 
         if exc_type is not None:
             traceback.print_exception(exc_type, exc_value, tb)
+            return False
         return True
 
     def _is_path_excluded(self, path):
