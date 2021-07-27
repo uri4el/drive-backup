@@ -17,13 +17,15 @@ import copy
 class DriveMock:
     TEST_DATA_FOLDER_DRIVE_NAME = 'TEST'
 
-    def __init__(self, folder_path_to_simulate=None):
+    def __init__(self, monkeypatch, folder_path_to_simulate=None):
         self._rd = random.Random()
         self._files_tree = None
         self.set_simulated_files_tree(folder_path_to_simulate)
 
         self.Credentials = DriveMock.CredentialsMock()
         self.build = self._build
+
+        self._init_mock(monkeypatch)
 
     def compare_drive_trees(self, drive_tree_1, drive_tree_2, compare_drive_id=False, compare_file_content=True):
 
@@ -52,19 +54,6 @@ class DriveMock:
 
     def _uuid(self):
         return str(uuid.UUID(int=self._rd.getrandbits(128)))
-
-    # def get_tree_copy(self):
-    #     new_node = None
-    #     for original_node in PreOrderIter(self._files_tree):
-    #         if not new_node:
-    #             new_node = Node(original_node.name, size=original_node.size, drive_id=original_node.drive_id, is_file=original_node.is_file)
-    #         else:
-    #             parent_node = cachedsearch.find_by_attr(new_node.root, name='drive_id', value=original_node.parent.drive_id)
-    #             new_node = Node(original_node.name, parent=parent_node, size=original_node.size,
-    #                             drive_id=original_node.drive_id, is_file=original_node.is_file)
-    #             if original_node.is_file:
-    #                 new_node = new_node.content = original_node.content
-    #     return new_node.root
 
     def set_simulated_files_tree(self, folder_path_to_simulate=None):
         self._rd.seed(0)
@@ -108,7 +97,7 @@ class DriveMock:
 
         self._files_tree = parent_node.root
 
-    def init_mock(self, monkeypatch):
+    def _init_mock(self, monkeypatch):
         for mock_name, mock in self.__dict__.items():
             if not mock_name.startswith('_'):
                 monkeypatch.setattr(f'backup.{mock_name}', mock)

@@ -9,6 +9,7 @@ import copy
 
 import backup
 from tests.drive_mock import DriveMock
+from tests.logger_mock import LoggerMock
 import anytree
 class DummyFileGenerator:
     os.chdir('..')
@@ -86,17 +87,19 @@ class DummyFileGenerator:
 class TestBackupEngine:
 
     @pytest.fixture(autouse=True)
-    def disable_internet_connection(self):
+    def disable_internet_connection(self, monkeypatch):
         def guard(*args, **kwargs):
             raise ConnectionError("Internet connection disabled for testing")
         socket.socket = guard
 
     @pytest.fixture(autouse=True)
+    def logger_mock(self, monkeypatch):
+        return LoggerMock(monkeypatch)
+
+    @pytest.fixture(autouse=True)
     def drive_mock(self, monkeypatch):
         with DummyFileGenerator():
-            drive_mock = DriveMock(DummyFileGenerator.TEST_DATA_FOLDER_PATH)
-        drive_mock.init_mock(monkeypatch)
-        return drive_mock
+            return DriveMock(monkeypatch, DummyFileGenerator.TEST_DATA_FOLDER_PATH)
 
     def test_backup_paths_sanity(self, drive_mock):
         with DummyFileGenerator() as tree:
@@ -122,22 +125,21 @@ class TestBackupEngine:
                 be.backup_paths()
                 assert drive_mock.compare_drive_trees(original_tree, drive_mock._files_tree, compare_drive_id=True)
 
-    def test_backup_paths_error(self, drive_mock):
+    def test_backup_paths_error(self, logger_mock):
         with DummyFileGenerator() as tree:
             be = backup.BackupEngine([tree.get_base_folder_path()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME)
             with pytest.raises(RuntimeError):
                 be.backup_paths()
             return None
 
-    def test_get_creds(self, drive_mock):
-        with DummyFileGenerator() as tree:
-            be = backup.BackupEngine([tree.get_file_path_from_base_folder()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME)
-            creds = be._get_creds()
-            drive_mock.Credentials.from_authorized_user_file = lambda a, b: 'uriel'
-            be = backup.BackupEngine([tree.get_file_path_from_base_folder()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME)
+    # def test_get_creds(self):
+    #     with DummyFileGenerator() as tree:
+    #         be = backup.BackupEngine([tree.get_file_path_from_base_folder()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME)
+    #         creds = be._get_creds()
+    #         drive_mock.Credentials.from_authorized_user_file = lambda a, b: 'uriel'
+    #         be = backup.BackupEngine([tree.get_file_path_from_base_folder()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME)
 
     def test_init_sanity(self):
-
         with DummyFileGenerator() as tree:
             be = backup.BackupEngine([tree.get_file_path_from_base_folder()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME)
             be = backup.BackupEngine([tree.get_base_folder_path()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME)

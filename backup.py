@@ -179,29 +179,7 @@ class SyncWorkerLocker:
 
 
 class BackupEngine:
-    def _TMP_TEST(self):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-        service = build('drive', 'v3', credentials=self._get_creds())
-        files = service.files()
-        req = files.list(
-            pageSize=1, fields="files",
-            q=f'name = "data_file2.html" and trashed = false and parents in "\\C:\\drive-backup\\test_data\\data_folder1"')
-        res = req.execute()
-
-        media = MediaFileUpload(
-            'C:\\drive-backup\\backup.py',
-            mimetype=mimetypes.MimeTypes().guess_type('backup.py')[0],
-            resumable=True)
-
-        service.files().update(
-            fileId='\\C:\\drive-backup\\test_data\\data_file1.txt',
-            body={},
-            media_body=media).execute()
-        return None
-
     def __init__(self, paths_to_backup: list, excluded_paths: list, backup_destination: str):
-        #self._TMP_TEST()
-
         self._file_changed_observer = None
         self._work_active = False
         self._upload_queue = None
