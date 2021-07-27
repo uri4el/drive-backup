@@ -408,9 +408,9 @@ class BackupEngine:
         parent_node = self._files_tree
         current_path = ''
         for folder_name_in_path in path.strip(os.sep).split(os.sep):
-            current_path += folder_name_in_path
+            current_path += os.sep + folder_name_in_path
             try:
-                parent_node = node_resolver.get(parent_node.root, os.sep + current_path)
+                parent_node = node_resolver.get(parent_node.root, current_path)
             except:
                 parent_node = Node(folder_name_in_path, parent=parent_node, size=0, drive_id=None, is_file=False)
 
