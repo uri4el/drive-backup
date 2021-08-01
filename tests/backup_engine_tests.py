@@ -148,9 +148,9 @@ class TestBackupEngine:
     def test_backup_paths_error(self, logger_mock):
         with DummyFileGenerator() as tree:
             be = backup.BackupEngine([tree.get_base_folder_path()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME)
+            # TESTCASE exception when calling backup_path without with block
             with pytest.raises(RuntimeError):
                 be.backup_paths()
-            return None
 
     # def test_get_creds(self):
     #     with DummyFileGenerator() as tree:
@@ -225,7 +225,40 @@ class TestBackupEngine:
                                      DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
                 be.backup_paths()
                 assert drive_mock.compare_drive_trees(original_tree, drive_mock.files_tree, compare_drive_id=True), \
-                    f'already synced folder has changed after backup when supplied 2 overlapped paths for backup.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
+                    f'already synced folder has changed after backup when supplied 2 overlapped paths for backup (order #1).\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
+
+            with backup.BackupEngine([tree.get_sub_folder_path(), tree.get_base_folder_path()], [],
+                                     DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
+                be.backup_paths()
+                assert drive_mock.compare_drive_trees(original_tree, drive_mock.files_tree, compare_drive_id=True), \
+                    f'already synced folder has changed after backup when supplied 2 overlapped paths for backup (order #2).\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
+
+            drive_mock.files_tree = drive_mock.get_simulated_files_tree()
+            with backup.BackupEngine([tree.get_base_folder_path(), tree.get_sub_folder_path()], [],
+                                     DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
+                be.backup_paths()
+                assert drive_mock.compare_drive_trees(original_tree, drive_mock.files_tree), \
+                    f'empty folder was synced unexpectedly when supplied 2 overlapped paths for sync.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
+
+            drive_mock.files_tree = drive_mock.get_simulated_files_tree()
+            with backup.BackupEngine([tree.get_sub_folder_path()], [],
+                                     DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
+                be.backup_paths()
+            with backup.BackupEngine([tree.get_base_folder_path()], [],
+                                     DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
+                be.backup_paths()
+            assert drive_mock.compare_drive_trees(original_tree, drive_mock.files_tree), \
+                f'empty folder was synced unexpectedly when supplied 2 overlapped paths (sub folder first) for sync.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
+
+            drive_mock.files_tree = drive_mock.get_simulated_files_tree()
+            with backup.BackupEngine([tree.get_base_folder_path()], [],
+                                     DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
+                be.backup_paths()
+            with backup.BackupEngine([tree.get_sub_folder_path()], [],
+                                     DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
+                be.backup_paths()
+            assert drive_mock.compare_drive_trees(original_tree, drive_mock.files_tree), \
+                f'empty folder was synced unexpectedly when supplied 2 overlapped paths (parent folder first) for sync.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
 
 
     def test_is_path_excluded_error(self):

@@ -249,6 +249,10 @@ class BackupEngine:
             return False
         return True
 
+    def _is_path_in_paths_to_backup(self, path):
+        path = os.path.abspath(path)
+        return any([path_to_backup == os.path.commonpath([path, os.path.abspath(path_to_backup)]) for path_to_backup in self._paths_to_backup])
+
     def _is_path_excluded(self, path):
         path = os.path.abspath(path)
         for excluded_path in self._excluded_paths:
@@ -264,6 +268,12 @@ class BackupEngine:
         if not self._is_valid_path(path):
             Logger.debug(f'{"file" if is_file else "folder"} skipped since it invalid {path}')
             return
+        if self._is_path_excluded(path):
+            Logger.debug(f'{"file" if is_file else "folder"} skipped since it is in excluded paths {path}')
+            return
+        if not self._is_path_in_paths_to_backup(path):
+            Logger.debug(f'{"file" if is_file else "folder"} skipped since it is not under configured paths to backup {path}')
+            return
 
         with self._workers_locker:
             node_resolver = Resolver()
@@ -273,19 +283,25 @@ class BackupEngine:
                 try:
                     parent_node = node_resolver.get(parent_node.root, os.sep + os.sep.join(folders_in_path[:i + 1]))
                 except:
-                    parent_node = Node(folders_in_path[i], parent=parent_node, size=0, drive_id=None, is_file=False)
+                    parent_node = Node(folders_in_path[i], parent=parent_node, size=0, drive_id=None, is_file=False, full_sync=False)
             parent_node.is_file = is_file
 
             if parent_node.is_file:
                 self._upload_queue.put([parent_node])
             else:
+                parent_node.full_sync = True
                 parent_node.drive_id = self._get_or_create_folder(parent_node.name,
                                                                            parent_node.parent.drive_id)
 
     def _on_file_deleted(self, path, is_file):
         Logger.debug(f'{"file" if is_file else "folder"} deleted {path}')
         if self._is_path_excluded(path):
+            Logger.debug(f'{"file" if is_file else "folder"} skipped since it is in excluded paths {path}')
             return
+        if not self._is_path_in_paths_to_backup(path):
+            Logger.debug(f'{"file" if is_file else "folder"} skipped since it is not under configured paths to backup {path}')
+            return
+
         service = build('drive', 'v3', credentials=self._get_creds())
         with self._workers_locker:
             node_resolver = Resolver()
@@ -317,6 +333,12 @@ class BackupEngine:
     def _on_file_modified(self, path, is_file):
         Logger.debug(f'{"file" if is_file else "folder"} modified {path}')
 
+        if self._is_path_excluded(path):
+            Logger.debug(f'{"file" if is_file else "folder"} skipped since it is in excluded paths {path}')
+            return
+        if not self._is_path_in_paths_to_backup(path):
+            Logger.debug(f'{"file" if is_file else "folder"} skipped since it is not under configured paths to backup {path}')
+            return
         if not self._is_valid_path(path):
             Logger.debug(f'{"file" if is_file else "folder"} skipped since it invalid {path}')
             self._on_file_deleted(path, is_file)
@@ -331,7 +353,7 @@ class BackupEngine:
                     try:
                         parent_node = node_resolver.get(parent_node.root, os.sep + os.sep.join(folders_in_path[:i + 1]))
                     except:
-                        parent_node = Node(folders_in_path[i], parent=parent_node, size=0, drive_id=None, is_file=False)
+                        parent_node = Node(folders_in_path[i], parent=parent_node, size=0, drive_id=None, is_file=False, full_sync=False)
                 parent_node.is_file = True
                 self._upload_queue.put([parent_node])
 
@@ -399,7 +421,7 @@ class BackupEngine:
             return False
 
     def _scan_path(self, path):
-        #TODO: test singel file backup, single file excluded path, test nested backup folders
+        #TODO: test singel file backup, single file excluded path, test nested backup folders, 2 seperate paths
 
         if not self._is_valid_path(path):
             Logger.error(f'path does not exist {path}')
@@ -414,7 +436,7 @@ class BackupEngine:
             try:
                 parent_node = node_resolver.get(parent_node.root, current_path)
             except:
-                parent_node = Node(folder_name_in_path, parent=parent_node, size=0, drive_id=None, is_file=False)
+                parent_node = Node(folder_name_in_path, parent=parent_node, size=0, drive_id=None, is_file=False, full_sync=False)
 
         if os.path.isfile(path):
             parent_node.is_file = True
@@ -430,7 +452,9 @@ class BackupEngine:
             except ResolverError:
                 parent_node = node_resolver.get(parent_node.root,
                                                 os.sep + os.path.abspath(root + os.sep + '..').lstrip(os.sep))
-                parent_node = Node(os.path.basename(root), parent=parent_node, size=0, drive_id=None, is_file=False)
+                parent_node = Node(os.path.basename(root), parent=parent_node, size=0, drive_id=None, is_file=False, full_sync=True)
+
+            #parent_node.full_sync = True
 
             for name in files:
                 # TODO: only do it for new created nodes.
@@ -535,7 +559,7 @@ class BackupEngine:
 
     def _scan_all_paths(self):
         random.shuffle(self._paths_to_backup)
-        # TODO make sure there isn't overlap, remove last slash, case insensitive in paths for windows only, single file as backup folder
+        # TODO remove last slash, case insensitive in paths for windows only, single file as backup folder
 
         self._destination_folder_id = self._get_or_create_folder(self._backup_destination, 'root')
         Logger.info(f'backup folder id on Drive: {self._backup_destination}')
@@ -568,24 +592,25 @@ class BackupEngine:
                         if path_node.drive_id is None:
                             path_node.drive_id = self._get_or_create_folder(path_node.name,
                                                                             self._destination_folder_id if path_node.is_root else path_node.parent.drive_id)
-                        next_page_token = None
-                        while True:
-                            results = service.files().list(
-                                pageSize=configurations.DRIVE_SCAN_PAGE_SIZE, fields="nextPageToken, files",
-                                pageToken=next_page_token,
-                                q=f'trashed = false and parents in "{path_node.drive_id}"').execute()
-                            items = results.get('files', [])
+                        if path_node.full_sync:
+                            next_page_token = None
+                            while True:
+                                results = service.files().list(
+                                    pageSize=configurations.DRIVE_SCAN_PAGE_SIZE, fields="nextPageToken, files",
+                                    pageToken=next_page_token,
+                                    q=f'trashed = false and parents in "{path_node.drive_id}"').execute()
+                                items = results.get('files', [])
 
-                            for item in items:
-                                try:
-                                    node_resolver.get(path_node, item['name'])
-                                except ResolverError:
-                                    service.files().delete(fileId=item['id']).execute()
-                                    Logger.debug(f'path deleted {self._get_node_path(path_node) + os.sep + item["name"]}')
+                                for item in items:
+                                    try:
+                                        node_resolver.get(path_node, item['name'])
+                                    except ResolverError:
+                                        service.files().delete(fileId=item['id']).execute()
+                                        Logger.debug(f'path deleted {self._get_node_path(path_node) + os.sep + item["name"]}')
 
-                            next_page_token = results.get('nextPageToken', None)
-                            if next_page_token is None:
-                                break
+                                next_page_token = results.get('nextPageToken', None)
+                                if next_page_token is None:
+                                    break
                     except Exception as e:
                         Logger.error(f'Failed to sync folder {path_node.name} with exception: {e}')
 
