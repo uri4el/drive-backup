@@ -13,7 +13,7 @@ import threading
 import time
 import traceback
 from datetime import datetime
-
+import re
 from anytree import Node, Resolver, ResolverError, PreOrderIter
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -66,13 +66,16 @@ class Logger:
 
 
 class FileChangeEventHandler(FileSystemEventHandler):
-    def __init__(self, on_created_event_handler, on_file_deleted_event_handler, on_file_modified_event_handler, on_file_moved_event_handler):
+    def __init__(self, on_created_event_handler, on_file_deleted_event_handler, on_file_modified_event_handler, on_file_moved_event_handler, regex_filter=None):
         self._on_created_event_handler = on_created_event_handler
         self._on_deleted_event_handler = on_file_deleted_event_handler
         self._on_modified_event_handler = on_file_modified_event_handler
         self._on_moved_event_handler = on_file_moved_event_handler
+        self._regex_filter = regex_filter
 
     def on_created(self, event):
+        if self._regex_filter and not re.search(self._regex_filter, event.src_path):
+            return
         for i in range(configurations.UPLOAD_RETRIES):
             try:
                 self._on_created_event_handler(event.src_path, not event.is_directory)
@@ -84,6 +87,8 @@ class FileChangeEventHandler(FileSystemEventHandler):
                     Logger.debug(f'file upload failed (try #{i}) {event.src_path}')
 
     def on_deleted(self, event):
+        if self._regex_filter and not re.search(self._regex_filter, event.src_path):
+            return
         for i in range(configurations.UPLOAD_RETRIES):
             try:
                 self._on_deleted_event_handler(event.src_path, not event.is_directory)
@@ -96,6 +101,8 @@ class FileChangeEventHandler(FileSystemEventHandler):
 
 
     def on_modified(self, event):
+        if self._regex_filter and not re.search(self._regex_filter, event.src_path):
+            return
         for i in range(configurations.UPLOAD_RETRIES):
             try:
                 self._on_modified_event_handler(event.src_path, not event.is_directory)
@@ -107,6 +114,8 @@ class FileChangeEventHandler(FileSystemEventHandler):
                     Logger.debug(f'file update failed (try #{i}) {event.src_path}')
 
     def on_moved(self, event):
+        if self._regex_filter and not re.search(self._regex_filter, event.src_path):
+            return
         for i in range(configurations.UPLOAD_RETRIES):
             try:
                 self._on_moved_event_handler(event.src_path, event.dest_path, not event.is_directory)
@@ -180,7 +189,7 @@ class SyncWorkerLocker:
 
 class BackupEngine:
     def __init__(self, paths_to_backup: list, excluded_paths: list, backup_destination: str):
-        self._file_changed_observer = None
+        self._file_changed_observer = []
         self._work_active = False
         self._upload_queue = None
         self._files_tree = None
@@ -212,19 +221,23 @@ class BackupEngine:
 
         self._scan_all_paths()
 
-        event_handler = FileChangeEventHandler(self._on_file_created, self._on_file_deleted, self._on_file_modified, self._on_file_moved)
-        self._file_changed_observer = Observer()
         # TODO: check what happen if path was deleted and you schedlue event handler for it
         for path in self._paths_to_backup:
-            self._file_changed_observer.schedule(event_handler, path, recursive=True)
-        self._file_changed_observer.start()
+            observer = Observer()
+            event_handler = FileChangeEventHandler(self._on_file_created, self._on_file_deleted, self._on_file_modified,
+                                                   self._on_file_moved, path if os.path.isfile(path) else None)
+            observer.schedule(event_handler, path, recursive=os.path.isdir(path))
+            observer.start()
+            self._file_changed_observer.append(observer)
 
         return self
 
     def __exit__(self, exc_type, exc_value, tb):
-        self._file_changed_observer.stop()
-        self._file_changed_observer.join()
-        self._file_changed_observer = None
+        for obs in self._file_changed_observer:
+            obs.stop()
+        for obs in self._file_changed_observer:
+            obs.join()
+        self._file_changed_observer = []
 
         self._work_active = False
         for i in range(configurations.WORKERS):

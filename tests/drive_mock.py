@@ -8,7 +8,7 @@ import os
 import hashlib
 import re
 import json
-from anytree import Node, PreOrderIter, RenderTree, cachedsearch
+from anytree import Node, PreOrderIter, RenderTree, cachedsearch, Resolver
 import uuid, random
 from googleapiclient.http import MediaFileUpload
 import copy
@@ -55,43 +55,56 @@ class DriveMock:
     def _uuid(self):
         return str(uuid.UUID(int=self._rd.getrandbits(128)))
 
-    def get_simulated_files_tree(self, folder_path_to_simulate=None):
+    def get_simulated_files_tree(self, folder_paths_to_simulate=None):
         self._rd.seed(0)
         parent_node = Node('root', size=0, drive_id='root', is_file=False)
         parent_node = Node(DriveMock.TEST_DATA_FOLDER_DRIVE_NAME, parent=parent_node, size=0, drive_id=self._uuid(),
                            is_file=False)
 
-        if not folder_path_to_simulate:
+        if not folder_paths_to_simulate or len(folder_paths_to_simulate) == 0:
             return parent_node.root
+        if len(folder_paths_to_simulate) > 1 and os.path.commonpath(folder_paths_to_simulate) in folder_paths_to_simulate:
+            raise Exception('Overlapped paths are not supported!')
 
-        folder_path_to_simulate = os.path.abspath(folder_path_to_simulate)
-        for folder_name_in_path in folder_path_to_simulate.strip(os.sep).split(os.sep):
-            parent_node = Node(folder_name_in_path, parent=parent_node, size=0, drive_id=self._uuid(),
-                               is_file=False)
+        for folder_path_to_simulate in folder_paths_to_simulate:
+            node_resolver = Resolver()
+            folder_path_to_simulate = os.path.abspath(folder_path_to_simulate)
+            current_path = os.sep + 'root' + os.sep + DriveMock.TEST_DATA_FOLDER_DRIVE_NAME
+            parent_node = node_resolver.get(parent_node.root, current_path)
+            for folder_name_in_path in folder_path_to_simulate.strip(os.sep).split(os.sep):
+                current_path += os.sep + folder_name_in_path
+                try:
+                    parent_node = node_resolver.get(parent_node.root, current_path)
+                except:
+                    parent_node = Node(folder_name_in_path, parent=parent_node, size=0, drive_id=self._uuid(), is_file=False)
 
-        if os.path.isfile(folder_path_to_simulate):
-            parent_node.is_file = True
-            with open(os.path.abspath(folder_path_to_simulate), "r") as f:
-                parent_node.content = f.read()
-                return parent_node.root
+            if os.path.isfile(folder_path_to_simulate):
+                parent_node.is_file = True
+                with open(os.path.abspath(folder_path_to_simulate), "r") as f:
+                    parent_node.content = f.read()
+                    continue
 
-        ids = {folder_path_to_simulate: parent_node.drive_id}
-        for root, folders, files in os.walk(folder_path_to_simulate, topdown=True):
-            folder_id = ids.get(root)
+            ids = {folder_path_to_simulate: parent_node.drive_id}
+            for root, folders, files in os.walk(folder_path_to_simulate, topdown=True):
+                folder_id = ids.get(root)
 
-            parent_node_tmp = cachedsearch.find_by_attr(parent_node.root, name='drive_id', value=folder_id)
-            if parent_node_tmp:
-                parent_node = parent_node_tmp
-            else:
-                parent_folder_id = ids.get(os.path.abspath(root + os.sep + '..'), self._uuid())
-                parent_node = cachedsearch.find_by_attr(parent_node.root, name='drive_id', value=parent_folder_id)
-                parent_node = Node(os.path.basename(root), parent=parent_node, size=0,
-                                   drive_id=self._uuid(),
-                                   is_file=False)
-            ids[root] = parent_node.drive_id
-            for name in files:
-                with open(root + os.sep + name, "r") as f:
-                    Node(name, parent=parent_node, size=0, drive_id=self._uuid(), is_file=True, content=f.read())
+                parent_node_tmp = cachedsearch.find_by_attr(parent_node.root, name='drive_id', value=folder_id)
+                if parent_node_tmp:
+                    parent_node = parent_node_tmp
+                else:
+                    try:
+                        parent_node = node_resolver.get(parent_node.root, os.sep + 'root' + os.sep + DriveMock.TEST_DATA_FOLDER_DRIVE_NAME + os.sep + root)
+                    except:
+                        parent_folder_id = ids.get(os.path.abspath(root + os.sep + '..'), self._uuid())
+                        parent_node = cachedsearch.find_by_attr(parent_node.root, name='drive_id',
+                                                                value=parent_folder_id)
+                        parent_node = Node(os.path.basename(root), parent=parent_node, size=0,
+                                       drive_id=self._uuid(),
+                                       is_file=False)
+                ids[root] = parent_node.drive_id
+                for name in files:
+                    with open(root + os.sep + name, "r") as f:
+                        Node(name, parent=parent_node, size=0, drive_id=self._uuid(), is_file=True, content=f.read())
 
         return parent_node.root
 

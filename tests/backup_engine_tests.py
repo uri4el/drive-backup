@@ -115,7 +115,7 @@ class TestBackupEngine:
     @pytest.fixture(autouse=True)
     def drive_mock(self, monkeypatch):
         with DummyFileGenerator():
-            return DriveMock(monkeypatch, DummyFileGenerator.TEST_DATA_FOLDER_PATH)
+            return DriveMock(monkeypatch, [DummyFileGenerator.TEST_DATA_FOLDER_PATH])
 
     def test_backup_paths_sanity(self, drive_mock):
         with DummyFileGenerator() as tree:
@@ -194,7 +194,7 @@ class TestBackupEngine:
             with backup.BackupEngine([tree.get_base_folder_path()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
                 be.backup_paths()
                 tree.remove_file_from_base_folder()
-                expected_tree = drive_mock.get_simulated_files_tree(DummyFileGenerator.TEST_DATA_FOLDER_PATH)
+                expected_tree = drive_mock.get_simulated_files_tree([DummyFileGenerator.TEST_DATA_FOLDER_PATH])
                 be.monitor_filesystem(1)
                 assert drive_mock.compare_drive_trees(expected_tree, drive_mock.files_tree), \
                     f'out of sync after file removed.\nExpected:\n{RenderTree(expected_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
@@ -260,6 +260,14 @@ class TestBackupEngine:
             assert drive_mock.compare_drive_trees(original_tree, drive_mock.files_tree), \
                 f'empty folder was synced unexpectedly when supplied 2 overlapped paths (parent folder first) for sync.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
 
+        with DummyFileGenerator() as tree:
+            drive_mock.files_tree = drive_mock.get_simulated_files_tree()
+
+            with backup.BackupEngine([tree.get_sub_folder_path(), tree.get_file_path_from_base_folder()], [],
+                                     DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
+                be.backup_paths()
+                assert drive_mock.compare_drive_trees(drive_mock.get_simulated_files_tree([tree.get_sub_folder_path(), tree.get_file_path_from_base_folder()]), drive_mock.files_tree), \
+                    f'---------.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
 
     def test_is_path_excluded_error(self):
         pass
