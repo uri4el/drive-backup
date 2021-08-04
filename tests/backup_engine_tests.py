@@ -23,11 +23,11 @@ class DummyFileGenerator:
             pass
 
     def __enter__(self):
-        os.makedirs(DummyFileGenerator.TEST_DATA_FOLDER_PATH + '/data_folder1/data_folder2')
-        self._create_file(DummyFileGenerator.TEST_DATA_FOLDER_PATH + '/data_file1.txt')
-        self._create_file(DummyFileGenerator.TEST_DATA_FOLDER_PATH + '/data_file1.png')
-        self._create_file(DummyFileGenerator.TEST_DATA_FOLDER_PATH + '/data_folder1/data_file2.docx')
-        self._create_file(DummyFileGenerator.TEST_DATA_FOLDER_PATH + '/data_folder1/data_file2.html')
+        os.makedirs(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_folder1{os.sep}data_folder2')
+        self._create_file(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_file1.txt')
+        self._create_file(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_file1.png')
+        self._create_file(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_folder1{os.sep}data_file2.docx')
+        self._create_file(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_folder1{os.sep}data_file2.html')
 
         return self
 
@@ -45,11 +45,11 @@ class DummyFileGenerator:
             fh.write(content)
 
     def get_non_existent_folder(self, absolute_path=True):
-        path = f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/non_existent_folder'
+        path = f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}non_existent_folder'
         return os.path.abspath(path) if absolute_path else path
 
     def get_non_existent_file(self, absolute_path=True):
-        path = f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/non_existent_file.txt'
+        path = f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}non_existent_file.txt'
         return os.path.abspath(path) if absolute_path else path
 
     def get_base_folder_path(self, absolute_path=True):
@@ -57,44 +57,44 @@ class DummyFileGenerator:
         return os.path.abspath(path) if absolute_path else path
 
     def get_sub_folder_path(self, absolute_path=True):
-        path = f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/data_folder1'
+        path = f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_folder1'
         return os.path.abspath(path) if absolute_path else path
 
     def get_file_path_from_base_folder(self, absolute_path=True):
-        path = f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/data_file1.txt'
+        path = f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_file1.txt'
         return os.path.abspath(path) if absolute_path else path
 
     def get_file_path_from_sub_folder(self, absolute_path=True):
-        path = f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/data_folder1/data_file2.docx'
+        path = f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_folder1{os.sep}data_file2.docx'
         return os.path.abspath(path) if absolute_path else path
 
     def get_folder_path_from_sub_folder(self, absolute_path=True):
-        path = f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/data_folder1/data_folder2'
+        path = f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_folder1{os.sep}data_folder2'
         return os.path.abspath(path) if absolute_path else path
 
     def add_folder_to_base_folder(self, folder_name):
-        os.makedirs(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/{folder_name}', exist_ok=True)
+        os.makedirs(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}{folder_name}', exist_ok=True)
 
     def add_folder_to_sub_folder(self, folder_name):
-        os.makedirs(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/data_folder1/{folder_name}', exist_ok=True)
+        os.makedirs(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_folder1{os.sep}{folder_name}', exist_ok=True)
 
     def add_file_to_base_folder(self, file_name):
-        self._create_file(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/{file_name}')
+        self._create_file(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}{file_name}')
 
     def add_file_to_sub_folder(self, file_name):
-        self._create_file(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/data_folder1/{file_name}')
+        self._create_file(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_folder1{os.sep}{file_name}')
 
     def remove_folder_from_base_folder(self):
-        shutil.rmtree(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/data_folder1')
+        shutil.rmtree(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_folder1')
 
     def remove_folder_from_sub_folder(self):
-        shutil.rmtree(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/data_folder1/data_folder2')
+        shutil.rmtree(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_folder1{os.sep}data_folder2')
 
     def remove_file_from_base_folder(self):
-        os.remove(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/data_file1.txt')
+        os.remove(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_file1.txt')
 
     def remove_file_from_sub_folder(self):
-        os.remove(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}/data_folder1/data_file2.docx')
+        os.remove(f'{DummyFileGenerator.TEST_DATA_FOLDER_PATH}{os.sep}data_folder1{os.sep}data_file2.docx')
 
 
 class TestBackupEngine:
@@ -103,7 +103,6 @@ class TestBackupEngine:
     def disable_internet_connection(self, monkeypatch):
         def guard(*args, **kwargs):
             raise ConnectionError("Internet connection disabled for testing")
-
         socket.socket = guard
 
     @pytest.fixture(autouse=True)
@@ -162,15 +161,43 @@ class TestBackupEngine:
                 assert drive_mock.compare_drive_trees(original_tree, drive_mock.files_tree), \
                     f'---------.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
 
-    def test_backup_paths_twice(self, drive_mock):
+    def test_multiple_backup_paths_calls(self, drive_mock):
         with DummyFileGenerator() as tree:
             drive_mock.files_tree = drive_mock.get_simulated_files_tree()
-            # TESTCASE 2 calls to backup_paths with same folder
+            # TESTCASE re-sync after remove file
             be = backup.BackupEngine([tree.get_base_folder_path()], [],
                                 DriveMock.TEST_DATA_FOLDER_DRIVE_NAME)
             with be:
                 be.backup_paths()
             tree.remove_file_from_base_folder()
+            with be:
+                be.backup_paths()
+            original_tree = drive_mock.get_simulated_files_tree([tree.get_base_folder_path()])
+            assert drive_mock.compare_drive_trees(
+                original_tree, drive_mock.files_tree), \
+                f'---------.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
+
+            # TESTCASE re-sync after add file
+            tree.add_file_to_base_folder('test_multiple_backup_paths_calls.txt')
+            with be:
+                be.backup_paths()
+            original_tree = drive_mock.get_simulated_files_tree([tree.get_base_folder_path()])
+            assert drive_mock.compare_drive_trees(
+                original_tree, drive_mock.files_tree), \
+                f'---------.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
+
+            # TESTCASE re-sync after modify file
+            with open(tree.get_file_path_from_sub_folder(), 'a') as f:
+                f.write('test_multiple_backup_paths_calls')
+            with be:
+                be.backup_paths()
+            original_tree = drive_mock.get_simulated_files_tree([tree.get_base_folder_path()])
+            assert drive_mock.compare_drive_trees(
+                original_tree, drive_mock.files_tree), \
+                f'---------.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
+
+            # TESTCASE re-sync after move file
+            os.rename(tree.get_file_path_from_sub_folder(), tree.get_base_folder_path() + os.sep + os.path.basename(tree.get_file_path_from_sub_folder()))
             with be:
                 be.backup_paths()
             original_tree = drive_mock.get_simulated_files_tree([tree.get_base_folder_path()])
@@ -234,11 +261,35 @@ class TestBackupEngine:
         with DummyFileGenerator() as tree:
             with backup.BackupEngine([tree.get_base_folder_path()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
                 be.backup_paths()
+                # TESTCASE remove file and check if it was synced
                 tree.remove_file_from_base_folder()
                 expected_tree = drive_mock.get_simulated_files_tree([DummyFileGenerator.TEST_DATA_FOLDER_PATH])
                 be.monitor_filesystem(1)
                 assert drive_mock.compare_drive_trees(expected_tree, drive_mock.files_tree), \
                     f'out of sync after file removed.\nExpected:\n{RenderTree(expected_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
+
+                # TESTCASE add file and check if it was synced
+                tree.add_file_to_base_folder('test_multiple_backup_paths_calls.txt')
+                original_tree = drive_mock.get_simulated_files_tree([tree.get_base_folder_path()])
+                assert drive_mock.compare_drive_trees(
+                    original_tree, drive_mock.files_tree), \
+                    f'---------.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
+
+                # TESTCASE modify file and check if it was synced
+                with open(tree.get_file_path_from_sub_folder(), 'a') as f:
+                    f.write('test_multiple_backup_paths_calls')
+                original_tree = drive_mock.get_simulated_files_tree([tree.get_base_folder_path()])
+                assert drive_mock.compare_drive_trees(
+                    original_tree, drive_mock.files_tree), \
+                    f'---------.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
+
+                # # TESTCASE move file and check if it was synced
+                # os.rename(tree.get_file_path_from_sub_folder(),
+                #           tree.get_base_folder_path() + os.sep + os.path.basename(tree.get_file_path_from_sub_folder()))
+                # original_tree = drive_mock.get_simulated_files_tree([tree.get_base_folder_path()])
+                # assert drive_mock.compare_drive_trees(
+                #     original_tree, drive_mock.files_tree), \
+                #     f'---------.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
 
     def test_is_path_excluded_sanity(self):
         with DummyFileGenerator() as tree:
