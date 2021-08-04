@@ -198,9 +198,9 @@ class BackupEngine:
         self._upload_progress = 0
         self._destination_folder_id = None
         # TODO: verify logic for support excluding single file
-        self._excluded_paths = [os.path.abspath(f) for f in excluded_paths if os.path.exists(f)]
+        self._excluded_paths = self._filter_paths(excluded_paths, validate_path=False)
         # TODO: remove nested paths
-        self._paths_to_backup = [os.path.abspath(p) for p in paths_to_backup if self._is_valid_path(p)]
+        self._paths_to_backup = self._filter_paths(paths_to_backup, validate_path=True)
         self._backup_destination = backup_destination
         self._workers = []
         self._workers_locker = None
@@ -261,6 +261,17 @@ class BackupEngine:
             traceback.print_exception(exc_type, exc_value, tb)
             return False
         return True
+
+    def _filter_paths(self, paths, validate_path):
+        res = []
+        if not paths:
+            return res
+        paths = list(set(paths))
+        for path in paths:
+            path = os.path.abspath(path)
+            if (not validate_path or self._is_valid_path(path)) and all([p == path or path != os.path.commonpath([p, path])] for p in paths):
+                res.append(path)
+        return res
 
     def _is_path_in_paths_to_backup(self, path):
         path = os.path.abspath(path)
@@ -467,7 +478,7 @@ class BackupEngine:
                                                 os.sep + os.path.abspath(root + os.sep + '..').lstrip(os.sep))
                 parent_node = Node(os.path.basename(root), parent=parent_node, size=0, drive_id=None, is_file=False, full_sync=True)
 
-            #parent_node.full_sync = True
+            parent_node.full_sync = True
 
             for name in files:
                 # TODO: only do it for new created nodes.
