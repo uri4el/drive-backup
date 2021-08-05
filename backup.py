@@ -22,7 +22,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
-
+import inspect
 import configurations
 
 socket.setdefaulttimeout(600)  # set timeout to 10 minutes
@@ -33,6 +33,7 @@ Node.separator = os.sep
 
 
 class Logger:
+    _time_format = '%d/%m/%Y %H:%M:%S.%f'
     _print_lock = threading.Lock()
 
     @staticmethod
@@ -40,25 +41,25 @@ class Logger:
         if configurations.LOG_LEVEL.upper() != 'DEBUG':
             return
         now = datetime.now()
-        dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
+        dt_string = now.strftime(Logger._time_format)
         with Logger._print_lock:
-            print(f'[{dt_string}] [DEBUG] [{threading.current_thread().name}] - {msg}')
+            print(f'[{dt_string}] [DEBUG] [{threading.current_thread().name}] [{inspect.stack()[1].function}] - {msg}', flush=True)
 
     @staticmethod
     def info(msg):
         if configurations.LOG_LEVEL.upper() != 'DEBUG' and configurations.LOG_LEVEL.upper() != 'INFO':
             return
         now = datetime.now()
-        dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
+        dt_string = now.strftime(Logger._time_format)
         with Logger._print_lock:
-            print(f'[{dt_string}] [INFO] [{threading.current_thread().name}] - {msg}')
+            print(f'[{dt_string}] [INFO] [{threading.current_thread().name}] [{inspect.stack()[1].function}] - {msg}', flush=True)
 
     @staticmethod
     def error(msg):
         now = datetime.now()
-        dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
+        dt_string = now.strftime(Logger._time_format)
         with Logger._print_lock:
-            print(f'[{dt_string}] [ERROR] [{threading.current_thread().name}] - {msg}')
+            print(f'[{dt_string}] [ERROR] [{threading.current_thread().name}] [{inspect.stack()[1].function}] - {msg}', flush=True)
 
     @staticmethod
     def print_progress(progress):
@@ -82,9 +83,10 @@ class FileChangeEventHandler(FileSystemEventHandler):
                 break
             except Exception as e:
                 if i == configurations.UPLOAD_RETRIES - 1:
+                    Logger.debug(f'file upload failed (try #{i}) in on_created {event.src_path}')
                     Logger.error(f'Failed to backup file {event.src_path} with exception: {e}')
                 else:
-                    Logger.debug(f'file upload failed (try #{i}) {event.src_path}')
+                    Logger.debug(f'file upload failed (try #{i}) in on_created {event.src_path}')
 
     def on_deleted(self, event):
         if self._regex_filter and not re.search(self._regex_filter, event.src_path):
@@ -529,6 +531,7 @@ class BackupEngine:
                                                          fields='id').execute()
                         path_node.drive_id = results.get('id')
                         Logger.debug(f'file uploaded {file_path}')
+
                     elif file_checksum != self._md5(file_path):
                         service.files().update(
                             fileId=path_node.drive_id,
@@ -541,9 +544,10 @@ class BackupEngine:
                     break
                 except Exception as e:
                     if i == configurations.UPLOAD_RETRIES - 1:
+                        Logger.debug(f'file upload failed (try #{i}) in on_created {file_path}')
                         Logger.error(f'Failed to backup file {file_path} with exception: {e}')
                     else:
-                        Logger.debug(f'file upload failed (try #{i}) {file_path}')
+                        Logger.debug(f'file upload failed (try #{i}) in on_created {file_path}')
         elif path_node.drive_id is not None:
             service.files().delete(fileId=path_node.drive_id).execute()
             Logger.debug(f'file deleted {file_path}')

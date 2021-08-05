@@ -5,7 +5,6 @@ import traceback
 import socket
 
 import pytest
-import copy
 
 import backup
 from tests.drive_mock import DriveMock
@@ -119,7 +118,7 @@ class TestBackupEngine:
     def test_backup_paths_sanity(self, drive_mock):
         with DummyFileGenerator() as tree:
             # TESTCASE no change sync
-            original_tree = copy.deepcopy(drive_mock.files_tree)
+            original_tree = drive_mock.clone_tree()
             with backup.BackupEngine([tree.get_base_folder_path()], [], DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
                 be.backup_paths()
                 assert drive_mock.compare_drive_trees(original_tree, drive_mock.files_tree, compare_drive_id=True), \
@@ -133,7 +132,7 @@ class TestBackupEngine:
                     f'sync folder to empty drive upload unexpected files.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
 
                 # TESTCASE no re-upload after re-calling backup_paths when no need
-                original_tree = copy.deepcopy(drive_mock.files_tree)
+                original_tree = drive_mock.clone_tree()
                 be.backup_paths()
                 assert drive_mock.compare_drive_trees(original_tree, drive_mock.files_tree, compare_drive_id=True), \
                     f'already synced folder has changed after second call to backup.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
@@ -271,21 +270,31 @@ class TestBackupEngine:
                 # TESTCASE add file and check if it was synced
                 tree.add_file_to_base_folder('test_multiple_backup_paths_calls.txt')
                 original_tree = drive_mock.get_simulated_files_tree([tree.get_base_folder_path()])
+                be.monitor_filesystem(1)
                 assert drive_mock.compare_drive_trees(
                     original_tree, drive_mock.files_tree), \
-                    f'---------.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
+                    f'---------.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync (id {id(drive_mock.files_tree)}):\n{RenderTree(drive_mock.files_tree)}'
 
                 # TESTCASE modify file and check if it was synced
                 with open(tree.get_file_path_from_sub_folder(), 'a') as f:
                     f.write('test_multiple_backup_paths_calls')
                 original_tree = drive_mock.get_simulated_files_tree([tree.get_base_folder_path()])
+                be.monitor_filesystem(1)
                 assert drive_mock.compare_drive_trees(
                     original_tree, drive_mock.files_tree), \
                     f'---------.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
 
-                # # TESTCASE move file and check if it was synced
-                # os.rename(tree.get_file_path_from_sub_folder(),
-                #           tree.get_base_folder_path() + os.sep + os.path.basename(tree.get_file_path_from_sub_folder()))
+                # TESTCASE move file and check if it was synced
+                os.rename(tree.get_file_path_from_sub_folder(),
+                          tree.get_base_folder_path() + os.sep + os.path.basename(tree.get_file_path_from_sub_folder()))
+                original_tree = drive_mock.get_simulated_files_tree([tree.get_base_folder_path()])
+                be.monitor_filesystem(1)
+                assert drive_mock.compare_drive_trees(
+                    original_tree, drive_mock.files_tree), \
+                    f'---------.\nBefore sync:\n{RenderTree(original_tree)}\nAfter sync:\n{RenderTree(drive_mock.files_tree)}'
+
+                # os.rename(tree.get_folder_path_from_sub_folder(),
+                #           tree.get_base_folder_path() + os.sep + os.path.basename(tree.get_folder_path_from_sub_folder()))
                 # original_tree = drive_mock.get_simulated_files_tree([tree.get_base_folder_path()])
                 # assert drive_mock.compare_drive_trees(
                 #     original_tree, drive_mock.files_tree), \
@@ -312,7 +321,7 @@ class TestBackupEngine:
 
     def test_overlapped_paths(self, drive_mock):
         with DummyFileGenerator() as tree:
-            original_tree = copy.deepcopy(drive_mock.files_tree)
+            original_tree = drive_mock.clone_tree()
             with backup.BackupEngine([tree.get_base_folder_path(), tree.get_sub_folder_path()], [],
                                      DriveMock.TEST_DATA_FOLDER_DRIVE_NAME) as be:
                 be.backup_paths()

@@ -8,18 +8,21 @@ import os
 import hashlib
 import re
 import json
+import threading
+import copy
+
 from anytree import Node, PreOrderIter, RenderTree, cachedsearch, Resolver
 import uuid, random
 from googleapiclient.http import MediaFileUpload
-import copy
 
 
 class DriveMock:
     TEST_DATA_FOLDER_DRIVE_NAME = 'TEST'
+    _locker = threading.Lock()
 
     def __init__(self, monkeypatch, folder_path_to_simulate=None):
         self._rd = random.Random()
-        self.files_tree = self.get_simulated_files_tree(folder_path_to_simulate)
+        self._files_tree = self.get_simulated_files_tree(folder_path_to_simulate)
         self._overridden_attributes = {
             'Credentials': DriveMock.CredentialsMock(),
             'build': self._build
@@ -54,6 +57,22 @@ class DriveMock:
 
     def _uuid(self):
         return str(uuid.UUID(int=self._rd.getrandbits(128)))
+
+    def clone_tree(self):
+        if not self._files_tree:
+            return None
+        with DriveMock._locker:
+            return copy.deepcopy(self._files_tree)
+
+    @property
+    def files_tree(self):
+        with DriveMock._locker:
+            return self._files_tree
+
+    @files_tree.setter
+    def files_tree(self, value):
+        with DriveMock._locker:
+            self._files_tree = value
 
     def get_simulated_files_tree(self, folder_paths_to_simulate=None):
         self._rd.seed(0)
@@ -113,7 +132,7 @@ class DriveMock:
             monkeypatch.setattr(f'backup.{mock_name}', mock)
 
     def _build(self, serviceName, version, credentials):
-        return DriveMock.ServiceMock(self.files_tree, self._uuid)
+        return DriveMock.ServiceMock(self._files_tree, self._uuid)
 
     class CredentialsMock:
         def __init__(self):
@@ -176,78 +195,81 @@ class DriveMock:
                 if 'nextPageToken' in fields:
                     res_dict['nextPageToken'] = None
 
-                parent_node = cachedsearch.find_by_attr(self._files_tree, name='drive_id', value=parent_id)
-                if not parent_node:
+                with DriveMock._locker:
+                    parent_node = cachedsearch.find_by_attr(self._files_tree, name='drive_id', value=parent_id)
+                    if not parent_node:
+                        return DriveMock.ServiceMock.FilesMock.RequestMock(res_dict)
+
+                    # TODO: lock the list every time it is used
+                    # TODO: add file sizing
+                    res = [node for node in parent_node.children if not name or node.name == name]
+                    pageToken = pageToken or 0
+                    nextPageToken = pageToken + pageSize
+                    if 'nextPageToken' in fields:
+                        res_dict['nextPageToken'] = nextPageToken if nextPageToken < len(res) else None
+
+                    res = res[pageToken:nextPageToken]
+                    if 'files' in fields:
+                        for node in res:
+                            if node.is_file:
+                                with open(f'tests{os.sep}mock_data_file.json', ) as t:
+                                    mock_data_file_template = json.load(t)
+                                    mock_data_file_template['id'] = node.drive_id
+                                    mock_data_file_template['name'] = node.name
+                                    mock_data_file_template['parents'] = [os.sep.join(
+                                        [''] + [node.name for node in node.parent.path]) if node.parent else 'root']
+                                    mock_data_file_template[
+                                        'webContentLink'] = f'https://drive.google.com/uc?id={node.drive_id}&export=download'
+                                    mock_data_file_template[
+                                        'webViewLink'] = f'https://drive.google.com/file/d/{node.drive_id}/view?usp=drivesdk'
+                                    mock_data_file_template['originalFilename'] = node.name
+                                    mock_data_file_template['md5Checksum'] = self._md5(node.content)
+                                    res_dict['files'].append(mock_data_file_template)
+                            else:
+                                with open(f'tests{os.sep}mock_data_folder.json', ) as t:
+                                    mock_data_folder_template = json.load(t)
+                                    mock_data_folder_template['id'] = node.drive_id
+                                    mock_data_folder_template['name'] = node.name
+                                    mock_data_folder_template['parents'] = [os.sep.join(
+                                        [''] + [node.name for node in node.parent.path]) if node.parent else 'root']
+                                    mock_data_folder_template[
+                                        'webViewLink'] = f'https://drive.google.com/file/d/{node.drive_id}/view?usp=drivesdk'
+                                    res_dict['files'].append(mock_data_folder_template)
+
                     return DriveMock.ServiceMock.FilesMock.RequestMock(res_dict)
 
-                # TODO: lock the list every time it is used
-                # TODO: add file sizing
-                res = [node for node in parent_node.children if not name or node.name == name]
-                pageToken = pageToken or 0
-                nextPageToken = pageToken + pageSize
-                if 'nextPageToken' in fields:
-                    res_dict['nextPageToken'] = nextPageToken if nextPageToken < len(res) else None
-
-                res = res[pageToken:nextPageToken]
-                if 'files' in fields:
-                    for node in res:
-                        if node.is_file:
-                            with open(f'tests{os.sep}mock_data_file.json', ) as t:
-                                mock_data_file_template = json.load(t)
-                                mock_data_file_template['id'] = node.drive_id
-                                mock_data_file_template['name'] = node.name
-                                mock_data_file_template['parents'] = [os.sep.join(
-                                    [''] + [node.name for node in node.parent.path]) if node.parent else 'root']
-                                mock_data_file_template[
-                                    'webContentLink'] = f'https://drive.google.com/uc?id={node.drive_id}&export=download'
-                                mock_data_file_template[
-                                    'webViewLink'] = f'https://drive.google.com/file/d/{node.drive_id}/view?usp=drivesdk'
-                                mock_data_file_template['originalFilename'] = node.name
-                                mock_data_file_template['md5Checksum'] = self._md5(node.content)
-                                res_dict['files'].append(mock_data_file_template)
-                        else:
-                            with open(f'tests{os.sep}mock_data_folder.json', ) as t:
-                                mock_data_folder_template = json.load(t)
-                                mock_data_folder_template['id'] = node.drive_id
-                                mock_data_folder_template['name'] = node.name
-                                mock_data_folder_template['parents'] = [os.sep.join(
-                                    [''] + [node.name for node in node.parent.path]) if node.parent else 'root']
-                                mock_data_folder_template[
-                                    'webViewLink'] = f'https://drive.google.com/file/d/{node.drive_id}/view?usp=drivesdk'
-                                res_dict['files'].append(mock_data_folder_template)
-
-                return DriveMock.ServiceMock.FilesMock.RequestMock(res_dict)
-
             def _delete(self, fileId):
-                try:
-                    node = cachedsearch.find_by_attr(self._files_tree, name='drive_id', value=fileId)
-                    node.parent.children = [c for c in node.parent.children if c.drive_id != node.drive_id]
-                except:
-                    pass
-                return DriveMock.ServiceMock.FilesMock.RequestMock()
+                with DriveMock._locker:
+                    try:
+                        node = cachedsearch.find_by_attr(self._files_tree, name='drive_id', value=fileId)
+                        node.parent.children = [c for c in node.parent.children if c.drive_id != node.drive_id]
+                    except:
+                        pass
+                    return DriveMock.ServiceMock.FilesMock.RequestMock()
 
             def _create(self, body, media_body=None, fields=None):
-                name = body['name']
-                parent_id = body['parents'][0]
-                parent_node = cachedsearch.find_by_attr(self._files_tree, name='drive_id', value=parent_id)
-                new_node = None
-                if media_body:  # It's a file
-                    file_path = os.path.abspath(media_body._filename)
-                    with open(file_path, "r") as f:
+                with DriveMock._locker:
+                    name = body['name']
+                    parent_id = body['parents'][0]
+                    parent_node = cachedsearch.find_by_attr(self._files_tree, name='drive_id', value=parent_id)
+                    new_node = None
+                    if media_body:  # It's a file
+                        file_path = os.path.abspath(media_body._filename)
+                        with open(file_path, "r") as f:
+                            new_node = Node(name, parent=parent_node, size=0, drive_id=self._uuid(),
+                                            is_file=True, content=f.read())
+                    else:  # It's a folder
                         new_node = Node(name, parent=parent_node, size=0, drive_id=self._uuid(),
-                                        is_file=True, content=f.read())
-                else:  # It's a folder
-                    new_node = Node(name, parent=parent_node, size=0, drive_id=self._uuid(),
-                                    is_file=False)
-
-                return DriveMock.ServiceMock.FilesMock.RequestMock({'id': new_node.drive_id})
-                # os.sep.join([''] + [node.name for node in parent_node.path])
+                                        is_file=False)
+                    return DriveMock.ServiceMock.FilesMock.RequestMock({'id': new_node.drive_id})
+                    # os.sep.join([''] + [node.name for node in parent_node.path])
 
             def _update(self, fileId, body, media_body):
-                node = cachedsearch.find_by_attr(self._files_tree, name='drive_id', value=fileId)
-                with open(os.path.abspath(media_body._filename), "r") as f:
-                    node.content = f.read()
-                return DriveMock.ServiceMock.FilesMock.RequestMock()
+                with DriveMock._locker:
+                    node = cachedsearch.find_by_attr(self._files_tree, name='drive_id', value=fileId)
+                    with open(os.path.abspath(media_body._filename), "r") as f:
+                        node.content = f.read()
+                    return DriveMock.ServiceMock.FilesMock.RequestMock()
 
             class RequestMock:
 
